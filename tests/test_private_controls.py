@@ -239,6 +239,7 @@ async def test_goal_command_uses_restored_codex_chat(
     first.save_mapping()
     restored = SessionManager(settings)
     restored.load_mapping()
+    assert restored.get_current_session_id((456, None)) == sid
     message = FakeMessage(456)
     message.text = "/goal"
 

@@ -1491,9 +1491,7 @@ class SessionManager:
 
     def get_current_session_id(self, channel_key: ChannelKey) -> str | None:
         """Get the current session_id for a channel, or None if no session."""
-        if channel_key not in self._sessions:
-            return None
-        return self._sessions[channel_key].session_id
+        return self._get_session(channel_key).session_id
 
     async def _clear_session_state_locked(self, session: SessionData) -> None:
         """Reset SessionData state — caller must hold ``session.lock``.
