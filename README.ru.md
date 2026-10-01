@@ -396,21 +396,24 @@ Slash commands устроены отдельно: в tmux topics non-bot command
 ## Команды
 
 - `/start`: проверить, что бот отвечает, и показать базовую клавиатуру.
-- `/clear`: сбросить сессию текущего topic.
+- `/new` или `/clear`: сбросить сессию чата или topic. В режиме subprocess
+  новый чат выбранного движка появится после следующего сообщения.
 - `/cancel`: отменить текущую обработку.
 - `/language`: показать или сменить язык UI, например `/language ru`.
-- `/mode`: только forum topics; выбрать `tmux` или `subprocess`. При
-  переключении с `tmux` на `subprocess` активная tmux session останавливается.
-- `/engine`: только forum topics; выбрать Claude Code или Codex. Смена engine
-  сбрасывает активную session.
+- `/mode`: выбрать постоянную TUI-сессию или `subprocess` в личном чате либо
+  forum topic. При переключении на `subprocess` активная TUI останавливается.
+- `/engine`: выбрать Claude Code или Codex. Смена движка сбрасывает активную
+  сессию.
 - `/codex_update`: обновить Codex CLI вручную. Команда обходит automatic
   cooldown, но блокируется другим bot-managed обновлением в этом процессе или
   bot-managed активными Codex sessions. `/codex_update status` показывает
   последний redacted result.
-- `/stream`: только forum topics; выбрать `verbose`, `live` или `minimal`.
-- `/resume`: только forum topics; возобновить сохраненную tmux session для cwd
-  текущего topic.
-- `/tui`: показать и управлять живой tmux TUI.
+- `/stream`: выбрать `verbose`, `live` или `minimal`.
+- `/resume`: выбрать сохранённый чат. В личном чате доступны чаты Codex из всех
+  проектов; `/resume <слово>` ищет по названию и пути. В forum topic список
+  ограничен его рабочей папкой.
+- `/goal`: посмотреть или изменить цель выбранного чата Codex.
+- `/tui`: показать и управлять живой TUI.
 - `/tail`: legacy alias для `/tui`.
 - `/kill`: остановить активную tmux session и освободить ресурсы.
 - `/recycle`: перезапустить активный tmux runtime и подчистить MCP processes

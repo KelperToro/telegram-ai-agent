@@ -18,11 +18,11 @@ tokens, or machine-specific deployment config.
 
 - Run Claude Code or Codex from Telegram private chats or group forum topics.
 - Keep one Telegram topic per project, workflow, or long-running agent context.
-- Bind a topic to a directory on your VPS, for example
-  `/home/user/projects/my-app`.
+- Bind a topic to a directory on the machine running the bot, for example
+  `/home/user/projects/my-app` or `C:\Users\me\projects\my-app`.
 - Choose Claude Code or Codex per topic.
-- Use a persistent `tmux` session for real development work, or a short-lived
-  subprocess for simple one-off tasks.
+- Use a persistent terminal session (`tmux` on Linux, ConPTY on Windows) for
+  real development work, or a short-lived subprocess for simple one-off tasks.
 - Send text, photos, documents, forwarded message batches, Telegram rich
   messages, and optional voice messages.
 - Customize the bundled example prompt for a second workflow.
@@ -392,21 +392,24 @@ still exists as a legacy alias, but `/clear` is the command shown in the menu.
 ## Commands
 
 - `/start`: check that the bot responds and show the basic keyboard.
-- `/clear`: reset the current topic session.
+- `/new` or `/clear`: reset the current chat or topic session. In subprocess
+  mode, the next message creates the new agent chat.
 - `/cancel`: cancel current processing.
 - `/language`: show or switch UI language, for example `/language ru`.
-- `/mode`: forum topics only; choose `tmux` or `subprocess`. Switching from
-  `tmux` to `subprocess` stops the active tmux session.
-- `/engine`: forum topics only; choose Claude Code or Codex. Changing engine
-  resets the active session.
+- `/mode`: choose a persistent TUI or `subprocess` in a private chat or forum
+  topic. Switching to `subprocess` stops the active TUI.
+- `/engine`: choose Claude Code or Codex. Changing engine resets the active
+  session.
 - `/codex_update`: update Codex CLI manually. It bypasses the automatic
   cooldown but is blocked by another bot-managed update in this process or
   bot-managed active Codex sessions. `/codex_update status` shows the last
   redacted result.
-- `/stream`: forum topics only; choose `verbose`, `live`, or `minimal`.
-- `/resume`: forum topics only; resume a saved tmux session for the current
-  topic working directory.
-- `/tui`: show and control the live tmux TUI.
+- `/stream`: choose `verbose`, `live`, or `minimal`.
+- `/resume`: select a saved session. Private chats list Codex chats from every
+  project; `/resume <word>` searches chat names and project paths. Forum topics
+  show sessions for their working directory.
+- `/goal`: view or change the goal for the selected Codex chat.
+- `/tui`: show and control the live terminal UI.
 - `/tail`: legacy alias for `/tui`.
 - `/kill`: stop the active tmux session and free resources.
 - `/recycle`: restart the active tmux runtime and clean topic-owned MCP
