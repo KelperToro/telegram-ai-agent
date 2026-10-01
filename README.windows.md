@@ -10,8 +10,8 @@
 В PowerShell скачайте этот Windows-форк и установите зависимости:
 
 ```powershell
-git clone https://github.com/KelperToro/telegram-ai-agent.git
-cd telegram-ai-agent
+git clone https://github.com/KelperToro/telegram-ai-agent-windows.git
+cd telegram-ai-agent-windows
 py -3.12 -m pip install --user uv
 py -3.12 -m uv sync --group dev
 Copy-Item .env.example .env

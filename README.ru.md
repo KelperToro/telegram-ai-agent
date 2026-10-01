@@ -114,8 +114,8 @@ CLI залогинен или настроен под тем же Linux-user, к
 Если на VPS уже есть Claude Code или Codex, это самый простой путь.
 
 ```bash
-git clone https://github.com/pavel-molyanov/telegram-ai-agent.git
-cd telegram-ai-agent
+git clone https://github.com/KelperToro/telegram-ai-agent-windows.git
+cd telegram-ai-agent-windows
 uv sync
 ```
 
@@ -149,8 +149,8 @@ systemd service.
 Склонируйте репозиторий и установите зависимости:
 
 ```bash
-git clone https://github.com/pavel-molyanov/telegram-ai-agent.git
-cd telegram-ai-agent
+git clone https://github.com/KelperToro/telegram-ai-agent-windows.git
+cd telegram-ai-agent-windows
 uv sync
 cp .env.example .env
 cp topic_config.example.json topic_config.json

@@ -113,8 +113,8 @@ authenticated or configured for the same Linux user that will run the bot.
 If you already have Claude Code or Codex on the VPS, this is the easiest path.
 
 ```bash
-git clone https://github.com/pavel-molyanov/telegram-ai-agent.git
-cd telegram-ai-agent
+git clone https://github.com/KelperToro/telegram-ai-agent-windows.git
+cd telegram-ai-agent-windows
 uv sync
 ```
 
@@ -148,8 +148,8 @@ whether to install a systemd service.
 Clone and install:
 
 ```bash
-git clone https://github.com/pavel-molyanov/telegram-ai-agent.git
-cd telegram-ai-agent
+git clone https://github.com/KelperToro/telegram-ai-agent-windows.git
+cd telegram-ai-agent-windows
 uv sync
 cp .env.example .env
 cp topic_config.example.json topic_config.json
