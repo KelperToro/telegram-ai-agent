@@ -49,6 +49,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.already_finished": "Process already finished",
         "ui.tmux_failed": "❌ Failed to start tmux: {exc}",
         "ui.tmux_killed": "🗑 Tmux session killed",
+        "ui.subprocess_killed": "🗑 Session stopped. The next message starts a new chat.",
+        "ui.subprocess_recycled": "🔄 Current task stopped. The next message resumes this session.",
         "ui.tmux_not_active": "No active tmux session in this topic",
         "ui.recycle_done": "♻️ Runtime restarted",
         "ui.recycle_failed": "❌ Couldn't restart the runtime. Try again in a moment.",
@@ -74,6 +76,21 @@ MESSAGES: dict[str, dict[str, str]] = {
             "⚠️ Codex update skipped: stop active Codex sessions first with /kill."
         ),
         "ui.codex_update_cooldown": "Codex auto-update skipped: cooldown is active.",
+        "ui.goal_no_session": "No active Codex chat. Send a message or choose one with /resume.",
+        "ui.goal_codex_only": "Goals are available for Codex chats only.",
+        "ui.goal_help": (
+            "Use /goal, /goal set <objective>, /goal pause, /goal resume, "
+            "/goal complete, /goal budget <tokens>, or /goal clear."
+        ),
+        "ui.goal_status": "<b>Goal</b>: {objective}\nStatus: {status}\nTokens: {used}/{budget}",
+        "ui.goal_cleared": "Goal cleared.",
+        "ui.goal_missing": "This chat has no goal. Use /goal set <objective>.",
+        "ui.goal_failed": "Could not update the goal. Try again.",
+        "ui.resume_no_matches": "No saved chats match that search. Try /resume with another word.",
+        "ui.codex_thread_busy": (
+            "Another Codex process is using this chat. Stop that run, then resend your message. "
+            "Your selected chat is preserved."
+        ),
         # --- UI: tail / tui feature strings (Wave 3 tmux-tui-mode) ----
         "ui.tail_unavailable": (
             "⚠️ No active tmux session — /tui is unavailable."
@@ -165,6 +182,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.session_switched": "🔄 session: {sid}",
         "ui.session_switched_engine": "🔄 {engine} session: {sid}",
         "ui.resume_picker_caption_hdr": "Sessions for <code>{cwd}</code>, page {page}/{total}",
+        "ui.resume_picker_caption_all_hdr": (
+            "Saved chats from all projects, page {page}/{total}. "
+            "Search by name or project: /resume &lt;word&gt;"
+        ),
         "ui.resume_no_sessions": "No saved sessions for this cwd",
         "ui.resume_not_in_forum": "⚠️ /resume works only in forum topics",
         "ui.resume_subprocess_unsupported": "This command works only in tmux mode (/mode)",
@@ -296,6 +317,24 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.write_skill": "📋 Updating skill",
     },
     "ru": {
+        "ui.goal_no_session": (
+            "Нет активного чата Codex. Отправьте сообщение или выберите чат через /resume."
+        ),
+        "ui.goal_codex_only": "Цели доступны только для чатов Codex.",
+        "ui.goal_help": (
+            "Команды: /goal, /goal set <цель>, /goal pause, /goal resume, "
+            "/goal complete, /goal budget <токены>, /goal clear."
+        ),
+        "ui.goal_status": "<b>Цель</b>: {objective}\nСтатус: {status}\nТокены: {used}/{budget}",
+        "ui.goal_cleared": "Цель удалена.",
+        "ui.goal_missing": "У этого чата нет цели. Задайте её через /goal set <цель>.",
+        "ui.goal_failed": "Не удалось изменить цель. Попробуйте ещё раз.",
+        "ui.resume_no_matches": "По запросу чаты не найдены. Попробуйте /resume с другим словом.",
+        "ui.codex_thread_busy": (
+            "Этот чат занят другим процессом Codex. "
+            "Остановите тот запуск и отправьте сообщение снова. "
+            "Выбранный чат сохранён."
+        ),
         # --- UI: user-facing status / error messages -------------------
         "ui.start_welcome": (
             "Привет! Я перешлю твои сообщения в Claude Code. Просто отправь мне сообщение."
@@ -319,6 +358,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.already_finished": "Процесс уже завершён",
         "ui.tmux_failed": "❌ Не удалось запустить tmux: {exc}",
         "ui.tmux_killed": "🗑 Tmux-сессия убита",
+        "ui.subprocess_killed": "🗑 Сессия остановлена. Следующее сообщение начнёт новый чат.",
+        "ui.subprocess_recycled": (
+            "🔄 Текущая задача остановлена. Следующее сообщение продолжит эту сессию."
+        ),
         "ui.tmux_not_active": "В этом топике нет активной tmux-сессии",
         "ui.recycle_done": "♻️ Runtime перезапущен",
         "ui.recycle_failed": (
@@ -435,6 +478,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.session_switched": "🔄 сессия: {sid}",
         "ui.session_switched_engine": "🔄 сессия {engine}: {sid}",
         "ui.resume_picker_caption_hdr": "Сессии для <code>{cwd}</code>, страница {page}/{total}",
+        "ui.resume_picker_caption_all_hdr": (
+            "Сохранённые чаты всех проектов, страница {page}/{total}. "
+            "Поиск по названию или проекту: /resume &lt;слово&gt;"
+        ),
         "ui.resume_no_sessions": "Сохранённых сессий для этого cwd нет",
         "ui.resume_not_in_forum": "⚠️ /resume работает только внутри форум-топиков",
         "ui.resume_subprocess_unsupported": "Команда работает только в tmux-режиме (/mode)",

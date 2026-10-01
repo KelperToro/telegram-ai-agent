@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import signal
@@ -10,7 +11,9 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
+from telegram_bot.core.services.windows_pty import run_tmux
 from telegram_bot.core.types import ChannelKey
 
 logger = logging.getLogger(__name__)
@@ -18,6 +21,7 @@ logger = logging.getLogger(__name__)
 _TERM_GRACE_SEC = 1.0
 _PROC = Path("/proc")
 _EXTRA_MCP_PROCESS_MARKERS: dict[str, tuple[str, ...]] = {}
+_psutil: Any = importlib.import_module("psutil") if os.name == "nt" else None
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,8 @@ class RuntimeDiagnostics:
 
 
 def classify_mcp_process(args: str) -> str | None:
-    if "mcp-servers/bot/server.py" in args:
+    args = args.replace("\\", "/")
+    if "mcp-servers/bot/server.py" in args or "mcp-servers/bot/start.py" in args:
         return "bot"
     if "telegram-mcp" in args:
         return "telegram"
@@ -88,7 +93,7 @@ def extend_mcp_process_classifiers(classifiers: dict[str, tuple[str, ...]]) -> N
 
 def tmux_pane_pid(session_name: str) -> int | None:
     try:
-        result = subprocess.run(
+        result = run_tmux(
             ["tmux", "display-message", "-p", "-t", f"={session_name}:", "#{pane_pid}"],
             capture_output=True,
             text=True,
@@ -145,6 +150,11 @@ def _read_cmdline(pid: int) -> str:
 
 
 def _read_environ(pid: int) -> dict[str, str]:
+    if os.name == "nt":
+        try:
+            return cast(dict[str, str], _psutil.Process(pid).environ())
+        except _psutil.Error:
+            return {}
     try:
         raw = (_PROC / str(pid) / "environ").read_bytes()
     except OSError:
@@ -159,6 +169,10 @@ def _read_environ(pid: int) -> dict[str, str]:
 
 
 def _iter_pids() -> list[int]:
+    if os.name == "nt":
+        return cast(list[int], _psutil.pids())
+    if not _PROC.is_dir():
+        return []
     pids: list[int] = []
     for entry in _PROC.iterdir():
         if entry.name.isdigit():
@@ -167,6 +181,21 @@ def _iter_pids() -> list[int]:
 
 
 def _process(pid: int) -> RuntimeProcess | None:
+    if os.name == "nt":
+        try:
+            process = _psutil.Process(pid)
+            with process.oneshot():
+                return RuntimeProcess(
+                    pid=pid,
+                    ppid=process.ppid(),
+                    pgid=pid,
+                    sid=pid,
+                    rss_kb=process.memory_info().rss // 1024,
+                    command=process.name(),
+                    args=" ".join(process.cmdline()),
+                )
+        except _psutil.Error:
+            return None
     stat = _read_stat(pid)
     if stat is None:
         return None
@@ -183,6 +212,13 @@ def _process(pid: int) -> RuntimeProcess | None:
 
 
 def processes_by_sid(sid: int) -> tuple[RuntimeProcess, ...]:
+    if os.name == "nt":
+        try:
+            root = _psutil.Process(sid)
+            pids = [root.pid, *(child.pid for child in root.children(recursive=True))]
+        except _psutil.Error:
+            return ()
+        return tuple(proc for pid in pids if (proc := _process(pid)) is not None)
     result: list[RuntimeProcess] = []
     current = os.getpid()
     for pid in _iter_pids():
@@ -223,6 +259,27 @@ def terminate_processes(processes: tuple[RuntimeProcess, ...]) -> int:
     if not targets:
         return 0
 
+    if os.name == "nt":
+        live = []
+        for pid in sorted(targets):
+            try:
+                process = _psutil.Process(pid)
+                process.terminate()
+                live.append(process)
+            except _psutil.NoSuchProcess:
+                pass
+            except _psutil.AccessDenied:
+                logger.warning("No permission to terminate pid=%s", pid)
+        _gone, alive = _psutil.wait_procs(live, timeout=_TERM_GRACE_SEC)
+        for process in alive:
+            try:
+                process.kill()
+            except _psutil.NoSuchProcess:
+                pass
+            except _psutil.AccessDenied:
+                logger.warning("No permission to kill pid=%s", process.pid)
+        return len(targets)
+
     for pid in sorted(targets):
         try:
             os.kill(pid, signal.SIGTERM)
@@ -240,7 +297,7 @@ def terminate_processes(processes: tuple[RuntimeProcess, ...]) -> int:
         if not (_PROC / str(pid)).exists():
             continue
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         except ProcessLookupError:
             pass
         except PermissionError:
@@ -265,7 +322,7 @@ def cleanup_tmux_runtime(
     if pane_pid is not None and (pane := _process(pane_pid)) is not None:
         pane_sid = pane.sid
 
-    subprocess.run(["tmux", "kill-session", "-t", f"={session_name}"], capture_output=True)
+    run_tmux(["tmux", "kill-session", "-t", f"={session_name}"], capture_output=True)
 
     targets: dict[int, RuntimeProcess] = {}
     if pane_sid is not None:

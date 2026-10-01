@@ -22,6 +22,8 @@ import subprocess
 import time
 from collections.abc import Callable
 
+from telegram_bot.core.services.windows_pty import run_tmux
+
 logger = logging.getLogger(__name__)
 
 # Real CC 2.1.114 trust-dialog text observed in PoC on 2026-04-19.
@@ -75,18 +77,18 @@ _TMUX_CMD_TIMEOUT_SEC = 10.0
 
 
 def _capture_pane(session_name: str) -> str:
-    result = subprocess.run(
+    result = run_tmux(
         ["tmux", "capture-pane", "-t", f"={session_name}:", "-p", "-S", "-200"],
         check=True,
         capture_output=True,
         text=True,
         timeout=_TMUX_CMD_TIMEOUT_SEC,
     )
-    return result.stdout
+    return str(result.stdout)
 
 
 def _send_enter(session_name: str) -> None:
-    subprocess.run(
+    run_tmux(
         ["tmux", "send-keys", "-t", f"={session_name}:", "Enter"],
         check=True,
         timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -94,7 +96,7 @@ def _send_enter(session_name: str) -> None:
 
 
 def _kill_session(session_name: str) -> None:
-    subprocess.run(
+    run_tmux(
         ["tmux", "kill-session", "-t", f"={session_name}"],
         check=False,
         timeout=_TMUX_CMD_TIMEOUT_SEC,

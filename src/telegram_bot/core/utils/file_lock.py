@@ -1,24 +1,54 @@
-"""Cross-process file locking via fcntl.flock.
+"""Cross-process file locking on Unix and Windows.
 
 Provides sync FileLock (for scripts) and AsyncFileLock (for async bot code).
 Lock file is {path}.lock — separate from the target file to avoid
 conflicts with os.replace() during atomic writes.
 
-Linux/macOS only (production and development are on Linux).
 """
 
 from __future__ import annotations
 
 import asyncio
-import fcntl
+import importlib
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
-from io import TextIOWrapper
 from pathlib import Path
 from types import TracebackType
+from typing import IO
+
+if os.name == "nt":
+    import msvcrt
+else:
+    fcntl = importlib.import_module("fcntl")
+
+
+def _lock_file(fd: IO[bytes], *, blocking: bool = True) -> None:
+    if os.name != "nt":
+        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        fcntl.flock(fd, flags)
+        return
+    fd.seek(0)
+    while True:
+        try:
+            msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError as exc:
+            if not blocking:
+                raise BlockingIOError("File is already locked") from exc
+            time.sleep(0.1)
+
+
+def _unlock_file(fd: IO[bytes]) -> None:
+    if os.name != "nt":
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    fd.seek(0)
+    msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 class FileLock:
-    """Sync cross-process file lock via fcntl.flock.
+    """Sync cross-process file lock.
 
     Usage::
 
@@ -30,14 +60,16 @@ class FileLock:
 
     def __init__(self, path: str | Path, *, blocking: bool = True) -> None:
         self._lock_path = Path(path).with_suffix(Path(path).suffix + ".lock")
-        self._fd: TextIOWrapper | None = None
+        self._fd: IO[bytes] | None = None
         self._blocking = blocking
 
     def __enter__(self) -> FileLock:
-        self._fd = open(self._lock_path, "w")
-        flags = fcntl.LOCK_EX if self._blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        self._fd = open(self._lock_path, "a+b")
+        if self._fd.tell() == 0:
+            self._fd.write(b"\0")
+            self._fd.flush()
         try:
-            fcntl.flock(self._fd, flags)
+            _lock_file(self._fd, blocking=self._blocking)
         except BlockingIOError:
             # Non-blocking acquire failed: another process holds the lock.
             self._fd.close()
@@ -52,7 +84,7 @@ class FileLock:
         exc_tb: TracebackType | None,
     ) -> None:
         if self._fd is not None:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            _unlock_file(self._fd)
             self._fd.close()
             self._fd = None
             # Lock file is intentionally NOT unlinked: removing it while
@@ -62,7 +94,7 @@ class FileLock:
 
 
 class AsyncFileLock:
-    """Async cross-process file lock — flock via run_in_executor.
+    """Async cross-process file lock via run_in_executor.
 
     Uses a dedicated ThreadPoolExecutor (not the default) to avoid
     blocking the executor pool during long lock waits.
@@ -79,7 +111,7 @@ class AsyncFileLock:
     def __init__(self, path: str | Path, executor: ThreadPoolExecutor | None = None) -> None:
         self._lock_path = Path(path).with_suffix(Path(path).suffix + ".lock")
         self._executor = executor
-        self._fd: TextIOWrapper | None = None
+        self._fd: IO[bytes] | None = None
 
     def _get_executor(self) -> ThreadPoolExecutor:
         if self._executor is not None:
@@ -91,12 +123,15 @@ class AsyncFileLock:
         return AsyncFileLock._shared_executor
 
     def _acquire(self) -> None:
-        self._fd = open(self._lock_path, "w")  # noqa: SIM115
-        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        self._fd = open(self._lock_path, "a+b")  # noqa: SIM115
+        if self._fd.tell() == 0:
+            self._fd.write(b"\0")
+            self._fd.flush()
+        _lock_file(self._fd)
 
     def _release(self) -> None:
         if self._fd is not None:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            _unlock_file(self._fd)
             self._fd.close()
             self._fd = None
             # No unlink — see FileLock.__exit__ (stale-inode race).

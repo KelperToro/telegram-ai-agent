@@ -23,6 +23,7 @@ from telegram_bot.core.services.tmux_spawn import (
     tmux_pane_inherits_disallowed_environment,
 )
 from telegram_bot.core.services.tmux_state import TmuxSessionState, parse_state_entry
+from telegram_bot.core.services.topic_config import config_id_for_channel
 from telegram_bot.core.types import ChannelKey
 
 
@@ -73,8 +74,8 @@ def _topic_base_mcp_config(
     source of truth: otherwise old long-lived sessions keep resurrecting with
     stale MCP profiles after a config deploy.
     """
-    thread_id = channel_key[1]
-    if thread_id is None:
+    config_id = config_id_for_channel(channel_key)
+    if config_id is None:
         return False, None
 
     for owner in owners:
@@ -88,7 +89,7 @@ def _topic_base_mcp_config(
         if not callable(get_topic):
             continue
         try:
-            topic = get_topic(thread_id)
+            topic = get_topic(config_id)
         except Exception:
             logger.warning("Failed to read topic MCP config for %s", channel_key, exc_info=True)
             continue
@@ -195,7 +196,7 @@ def restore_all(
     # variables outside the agent allowlist before reattaching live panes.
     from telegram_bot.core.services import tmux_manager as _tm
 
-    sanitized_tmux_environment(run=_tm.subprocess.run)  # type: ignore[attr-defined]
+    sanitized_tmux_environment(run=_tm.run_tmux)  # type: ignore[attr-defined]
 
     restored: dict[ChannelKey, TmuxSessionState] = {}
     for key_str, data in raw.items():
@@ -226,19 +227,19 @@ def restore_all(
                 and is_supported_tui
                 and tmux_pane_inherits_disallowed_environment(
                     state.session_name,
-                    run=_tm.subprocess.run,  # type: ignore[attr-defined]
+                    run=_tm.run_tmux,  # type: ignore[attr-defined]
                 )
             ):
                 logger.warning(
                     "Restarting legacy tmux session %s with a sanitized environment",
                     state.session_name,
                 )
-                _tm.subprocess.run(  # type: ignore[attr-defined]
+                _tm.run_tmux(  # type: ignore[attr-defined]
                     ["tmux", "kill-session", "-t", f"={state.session_name}"],
                     capture_output=True,
                     check=False,
                     env=sanitized_tmux_environment(
-                        run=_tm.subprocess.run  # type: ignore[attr-defined]
+                        run=_tm.run_tmux  # type: ignore[attr-defined]
                     ),
                 )
                 alive = False

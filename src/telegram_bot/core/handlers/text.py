@@ -20,7 +20,7 @@ from telegram_bot.core.services.message_queue import MessageQueue
 from telegram_bot.core.services.providers import engine_display_name
 from telegram_bot.core.services.rich_content import normalize_telegram_content
 from telegram_bot.core.services.tmux_manager import TmuxManager
-from telegram_bot.core.services.topic_config import TopicConfig
+from telegram_bot.core.services.topic_config import TopicConfig, config_id_for_channel
 from telegram_bot.core.tui.routing import route_slash_command
 from telegram_bot.core.types import channel_key
 
@@ -46,6 +46,7 @@ async def handle_text(
         return
 
     key = channel_key(message)
+    config_id = config_id_for_channel(key)
     logger.info(
         "MSG_TRACE handle_text channel=%s msg=%d text_len=%d user=%s",
         key,
@@ -68,7 +69,7 @@ async def handle_text(
     if (
         text.startswith("/")
         and route_slash_command(text) == "tui"
-        and topic_config.get_topic(key[1]).exec_mode == "tmux"
+        and topic_config.get_topic(config_id).exec_mode == "tmux"
     ):
         if not await ensure_exec_mode_ready(
             key, topic_config, tmux_manager, session_manager, message
@@ -87,7 +88,7 @@ async def handle_text(
             )
 
         if reply_ref is not None:
-            settings = topic_config.get_topic(key[1])
+            settings = topic_config.get_topic(config_id)
             if reply_ref.provider not in {"claude", "codex"}:
                 await source_msg.answer(t("ui.tui_session_missing"))
                 return
@@ -106,14 +107,13 @@ async def handle_text(
                 if tmux_manager.is_processing(key) or message_queue.is_busy(key):
                     await source_msg.answer(t("ui.exec_mode_busy"))
                     return
-                thread_id = key[1]
-                if thread_id is None:
+                if config_id is None:
                     await source_msg.answer(t("ui.engine_not_in_forum"))
                     return
                 if exec_mode_changed and provider_changed:
                     assert target_exec_mode is not None
                     ok = await topic_config.update_engine_model_exec_mode(
-                        thread_id,
+                        config_id,
                         reply_ref.provider,  # type: ignore[arg-type]
                         None,
                         target_exec_mode,
@@ -123,13 +123,13 @@ async def handle_text(
                         return
                 elif exec_mode_changed:
                     assert target_exec_mode is not None
-                    ok = await topic_config.update_exec_mode(thread_id, target_exec_mode)
+                    ok = await topic_config.update_exec_mode(config_id, target_exec_mode)
                     if not ok:
                         await source_msg.answer(t("ui.exec_mode_write_failed"))
                         return
                 elif provider_changed:
                     ok = await topic_config.update_engine_model(
-                        thread_id,
+                        config_id,
                         reply_ref.provider,  # type: ignore[arg-type]
                         None,
                     )

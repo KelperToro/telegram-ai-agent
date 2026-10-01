@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +35,15 @@ def _load_mcp_config(path: Path) -> dict[str, Any]:
 
 
 def _standard_bot_server(project_root: Path) -> dict[str, Any]:
+    if os.name == "nt":
+        command = sys.executable
+        args = [str(project_root / "mcp-servers" / "bot" / "start.py")]
+    else:
+        command = "bash"
+        args = [str(project_root / "mcp-servers" / "bot" / "start.sh")]
     return {
-        "command": "bash",
-        "args": [str(project_root / "mcp-servers" / "bot" / "start.sh")],
+        "command": command,
+        "args": args,
         "env": {
             "APP_ROOT": str(project_root),
             "ENV_FILE": str(project_root / ".env"),

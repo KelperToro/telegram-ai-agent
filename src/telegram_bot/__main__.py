@@ -40,6 +40,7 @@ from telegram_bot.core.services.tmux_manager import TmuxManager
 from telegram_bot.core.services.topic_config import TopicConfig
 from telegram_bot.core.services.topic_runtime import BotDefaults
 from telegram_bot.core.services.transcriber import Transcriber
+from telegram_bot.core.services.windows_pty import configure_broker
 from telegram_bot.core.types import ChannelKey
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,8 @@ async def process_queue_item(
 
 
 async def _start() -> None:
+    if os.name == "nt" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -192,7 +195,10 @@ async def _start() -> None:
     topic_config_path = settings.resolve_workspace_path(settings.topic_config_path)
     workspace_root = settings.workspace_root_path
     tmux_sessions_dir = settings.resolve_workspace_path(settings.tmux_sessions_dir)
-    _ensure_dedicated_tmux_tmpdir(workspace_root, tmux_sessions_dir)
+    if os.name != "nt":
+        _ensure_dedicated_tmux_tmpdir(workspace_root, tmux_sessions_dir)
+    else:
+        configure_broker(tmux_sessions_dir)
     topic_config = TopicConfig(str(topic_config_path), str(workspace_root))
     tmux_manager = TmuxManager(
         sessions_dir=tmux_sessions_dir,
@@ -209,7 +215,7 @@ async def _start() -> None:
     tmux_manager.restore_all(session_manager)
     picker_store = PickerStore()
     bot_defaults = BotDefaults(
-        cwd=settings.resolve_workspace_path(settings.default_cwd),
+        cwd=settings.resolve_workspace_path(settings.default_cwd).resolve(),
         mcp_config=Path(session_manager.default_mcp_config_path()),
     )
     transcriber = Transcriber(settings)
@@ -304,8 +310,9 @@ async def _start() -> None:
         if _pending_stop is None:
             _pending_stop = asyncio.create_task(_stop_polling_when_started(dp))
 
-    loop.add_signal_handler(signal.SIGTERM, _stop)
-    loop.add_signal_handler(signal.SIGINT, _stop)
+    if os.name != "nt":
+        loop.add_signal_handler(signal.SIGTERM, _stop)
+        loop.add_signal_handler(signal.SIGINT, _stop)
 
     recovery_factory = make_recovery_on_event(
         bot,

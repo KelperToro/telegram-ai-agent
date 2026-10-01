@@ -9,6 +9,8 @@ import logging
 import math
 import os
 import time
+import uuid
+from dataclasses import replace
 from pathlib import Path
 
 from aiogram import F, Router
@@ -22,7 +24,6 @@ from telegram_bot.core.handlers.forward import ForwardBatcher
 from telegram_bot.core.keyboards import (
     RESUME_PAGE_SIZE,
     _format_age,
-    _format_size,
     engine_keyboard,
     exec_mode_keyboard,
     resume_keyboard,
@@ -31,10 +32,17 @@ from telegram_bot.core.keyboards import (
 )
 from telegram_bot.core.messages import reset_lang_cache, t
 from telegram_bot.core.services.claude import SessionManager
+from telegram_bot.core.services.codex_app_server import (
+    CodexAppServerError,
+    clear_thread_goal,
+    get_thread_goal,
+    list_codex_thread_titles,
+    set_thread_goal,
+)
 from telegram_bot.core.services.codex_update import CodexUpdateResult, CodexUpdateService
 from telegram_bot.core.services.message_queue import MessageQueue
 from telegram_bot.core.services.picker_store import PickerState, PickerStore
-from telegram_bot.core.services.providers import engine_display_name
+from telegram_bot.core.services.providers import engine_display_name, is_engine_available
 from telegram_bot.core.services.resume_listing import (
     SessionEntry,
     _same_cwd,
@@ -49,6 +57,7 @@ from telegram_bot.core.services.topic_config import (
     _VALID_STREAM_MODES,
     Engine,
     TopicConfig,
+    config_id_for_channel,
 )
 from telegram_bot.core.services.topic_runtime import BotDefaults, resolve_topic_runtime_config
 from telegram_bot.core.types import ChannelKey, channel_key
@@ -66,7 +75,7 @@ def _exec_mode_label(mode: str) -> str:
     if mode == "subprocess":
         return t("ui.exec_mode_label_subprocess")
     if mode == "tmux":
-        return t("ui.exec_mode_label_tmux")
+        return "TUI (ConPTY)" if os.name == "nt" else t("ui.exec_mode_label_tmux")
     return mode
 
 
@@ -119,9 +128,10 @@ def _resume_caption(
     total_pages: int,
     entries: tuple[SessionEntry, ...] = (),
     current_session_id: str | None = None,
+    all_projects: bool = False,
 ) -> str:
-    safe_cwd = html.escape(str(cwd))
-    text = t("ui.resume_picker_caption_hdr", cwd=safe_cwd, page=page + 1, total=total_pages)
+    header = "ui.resume_picker_caption_all_hdr" if all_projects else "ui.resume_picker_caption_hdr"
+    text = t(header, cwd=html.escape(str(cwd)), page=page + 1, total=total_pages)
     if not entries:
         return text
 
@@ -129,19 +139,18 @@ def _resume_caption(
     start = page * RESUME_PAGE_SIZE
     for idx, entry in enumerate(entries[start : start + RESUME_PAGE_SIZE], start=start):
         provider = engine_display_name(entry.provider)
-        preview = html.escape(entry.preview)
+        label = entry.title or entry.preview
+        if label == entry.session_id[:8] and entry.cwd is not None:
+            label = f"{entry.cwd.name} · {label}"
+        preview = html.escape(label)
         prefix = "✅ " if entry.session_id == current_session_id else ""
-        parts = [
-            f"{prefix}{idx + 1}. <b>{provider}</b>",
-            _format_age(entry.mtime),
-            _format_size(entry.size_bytes),
-            f"<code>{html.escape(entry.session_id[:8])}</code>",
-        ]
+        parts = [f"{prefix}{idx + 1}. <b>{preview}</b>"]
+        details = [provider, _format_age(entry.mtime), html.escape(entry.session_id[:8])]
         if entry.session_id == current_session_id:
-            parts.append(t("ui.resume_current_marker"))
-        block_lines = [" · ".join(parts)]
-        if preview:
-            block_lines.append(f"   {preview}")
+            details.append(t("ui.resume_current_marker"))
+        block_lines = ["".join(parts), "   " + " · ".join(details)]
+        if entry.cwd is not None and not _same_cwd(entry.cwd, cwd):
+            block_lines.append(f"   <code>{html.escape(str(entry.cwd))}</code>")
         blocks.append("\n".join(block_lines))
     return "\n\n".join([text, *blocks])
 
@@ -215,6 +224,71 @@ async def handle_codex_update(
     await message.answer(response, parse_mode="HTML")
 
 
+@router.message(Command("goal"))
+async def handle_goal(
+    message: Message,
+    session_manager: SessionManager,
+    tmux_manager: TmuxManager,
+) -> None:
+    """Manage the selected Codex thread's persisted goal through app-server."""
+    key = channel_key(message)
+    session_id = (
+        tmux_manager.get_active_session_id(key) or session_manager._get_session(key).session_id
+    )
+    if not session_id:
+        await message.answer(t("ui.goal_no_session"))
+        return
+    try:
+        is_codex = uuid.UUID(session_id).version == 7
+    except ValueError:
+        is_codex = False
+    if not is_codex:
+        await message.answer(t("ui.goal_codex_only"))
+        return
+
+    raw = (message.text or "").partition(" ")[2].strip()
+    action, _, value = raw.partition(" ")
+    try:
+        if not raw or action == "status":
+            goal = await get_thread_goal(session_id)
+        elif action == "set" and value.strip():
+            goal = await set_thread_goal(session_id, objective=value.strip(), status="active")
+        elif action in {"pause", "resume", "complete"} and not value.strip():
+            status = {"pause": "paused", "resume": "active", "complete": "complete"}[action]
+            goal = await set_thread_goal(session_id, status=status)
+        elif action == "budget" and value.strip().isdigit():
+            goal = await set_thread_goal(session_id, token_budget=int(value.strip()))
+        elif action == "clear" and not value.strip():
+            cleared = await clear_thread_goal(session_id)
+            await message.answer(t("ui.goal_cleared" if cleared else "ui.goal_missing"))
+            return
+        else:
+            await message.answer(t("ui.goal_help"))
+            return
+    except (CodexAppServerError, ValueError):
+        logger.warning("Codex goal command failed for channel %s", key, exc_info=True)
+        await message.answer(t("ui.goal_failed"))
+        return
+
+    if goal is None:
+        await message.answer(t("ui.goal_missing"))
+        return
+    objective = html.escape(str(goal.get("objective", "")))
+    status = html.escape(str(goal.get("status", "unknown")))
+    used = goal.get("tokensUsed", 0)
+    budget = goal.get("tokenBudget")
+    await message.answer(
+        t(
+            "ui.goal_status",
+            objective=objective,
+            status=status,
+            used=used,
+            budget=budget if budget is not None else "∞",
+        ),
+        parse_mode="HTML",
+    )
+
+
 async def _reset_channel(
     message: Message,
     key: ChannelKey,
@@ -230,7 +304,7 @@ async def _reset_channel(
     Dormant tmux → drop stale state and start a fresh TUI immediately.
     Otherwise → full subprocess reset + ui.new_session.
     """
-    settings = topic_config.get_topic(key[1])
+    settings = topic_config.get_topic(config_id_for_channel(key))
     if tmux_manager.is_active(key):
         # clear_context respawns the tmux session; _spawn_tmux can fail
         # (tmux server shutdown race, readiness timeout, etc.). Without a
@@ -335,11 +409,18 @@ async def handle_cancel_command(
 
 
 @router.message(Command("kill"))
-async def handle_kill(message: Message, tmux_manager: TmuxManager) -> None:
-    """Kill the tmux session in the current topic."""
+async def handle_kill(
+    message: Message,
+    tmux_manager: TmuxManager,
+    session_manager: SessionManager,
+    message_queue: MessageQueue,
+) -> None:
+    """Kill the active runtime and forget its conversation."""
     key = channel_key(message)
     if not tmux_manager.is_active(key):
-        await message.answer(t("ui.tmux_not_active"))
+        await message_queue.clear(key)
+        await session_manager.kill_session(key)
+        await message.answer(t("ui.subprocess_killed"))
         return
     logger.debug(
         "User %s killed tmux session for %s", message.from_user and message.from_user.id, key
@@ -366,7 +447,8 @@ async def handle_recycle(
     """Restart the current tmux runtime without intentionally clearing context."""
     key = channel_key(message)
     if not tmux_manager.is_active(key):
-        await message.answer(t("ui.tmux_not_active"))
+        await message_queue.cancel(key)
+        await message.answer(t("ui.subprocess_recycled"))
         return
     if tmux_manager.is_processing(key) or message_queue.is_busy(key):
         await message.answer(t("ui.exec_mode_busy"))
@@ -394,14 +476,35 @@ async def handle_resume(
 ) -> None:
     """Open server-side picker with resumable Claude/Codex sessions."""
     key = channel_key(message)
-    if key[1] is None:
-        await message.answer(t("ui.resume_not_in_forum"))
-        return
-
-    runtime = resolve_topic_runtime_config(topic_config.get_topic(key[1]), bot_defaults)
-    entries = tuple(await asyncio.to_thread(list_sessions, runtime.cwd))
+    runtime = resolve_topic_runtime_config(
+        topic_config.get_topic(config_id_for_channel(key)), bot_defaults
+    )
+    private_chat = key[0] > 0 and key[1] is None
+    entries = tuple(await asyncio.to_thread(list_sessions, runtime.cwd, all_codex=private_chat))
+    if private_chat:
+        try:
+            names = await list_codex_thread_titles()
+        except (CodexAppServerError, OSError, TimeoutError):
+            logger.warning("Could not load Codex thread names", exc_info=True)
+            names = {}
+        entries = tuple(
+            replace(entry, title=names.get(entry.session_id))
+            if entry.provider == "codex"
+            else entry
+            for entry in entries
+        )
+    query = (message.text or "").partition(" ")[2].strip().casefold()
+    if query:
+        entries = tuple(
+            entry
+            for entry in entries
+            if query
+            in " ".join(
+                (entry.title or "", entry.preview, str(entry.cwd or ""), entry.session_id)
+            ).casefold()
+        )
     if not entries:
-        await message.answer(t("ui.resume_no_sessions"))
+        await message.answer(t("ui.resume_no_matches" if query else "ui.resume_no_sessions"))
         return
 
     token = picker_store.put(
@@ -415,7 +518,9 @@ async def handle_resume(
         )
     )
     total_pages = max(1, math.ceil(len(entries) / 8))
-    current_session_id = tmux_manager.get_active_session_id(key)
+    current_session_id = tmux_manager.get_active_session_id(
+        key
+    ) or session_manager.get_current_session_id(key)
     await message.answer(
         _resume_caption(
             runtime.cwd,
@@ -423,6 +528,7 @@ async def handle_resume(
             total_pages=total_pages,
             entries=entries,
             current_session_id=current_session_id,
+            all_projects=private_chat,
         ),
         reply_markup=resume_keyboard(
             entries,
@@ -498,6 +604,7 @@ async def on_resume_page(
     callback: CallbackQuery,
     picker_store: PickerStore,
     tmux_manager: TmuxManager,
+    session_manager: SessionManager,
 ) -> None:
     if callback.data is None or callback.message is None:
         await callback.answer()
@@ -529,12 +636,15 @@ async def on_resume_page(
                 page=page,
                 total_pages=total_pages,
                 entries=state.entries,
-                current_session_id=tmux_manager.get_active_session_id(key),
+                current_session_id=tmux_manager.get_active_session_id(key)
+                or session_manager.get_current_session_id(key),
+                all_projects=key[0] > 0 and key[1] is None,
             ),
             reply_markup=resume_keyboard(
                 state.entries,
                 page=page,
-                current_session_id=tmux_manager.get_active_session_id(key),
+                current_session_id=tmux_manager.get_active_session_id(key)
+                or session_manager.get_current_session_id(key),
                 token=token,
             ),
             parse_mode="HTML",
@@ -553,6 +663,7 @@ async def on_resume_pick(
     tmux_manager: TmuxManager,
     picker_store: PickerStore,
     bot_defaults: BotDefaults,
+    message_queue: MessageQueue | None = None,
 ) -> None:
     if callback.data is None or callback.message is None:
         await callback.answer()
@@ -570,7 +681,9 @@ async def on_resume_pick(
     if state is None or key != (state.chat_id, state.thread_id):
         await _stale_resume_picker(callback)
         return
-    runtime = resolve_topic_runtime_config(topic_config.get_topic(key[1]), bot_defaults)
+    runtime = resolve_topic_runtime_config(
+        topic_config.get_topic(config_id_for_channel(key)), bot_defaults
+    )
     if not _same_cwd(runtime.cwd, state.cwd):
         await _stale_resume_picker(callback)
         return
@@ -586,6 +699,49 @@ async def on_resume_pick(
         entry = state.entries[idx]
     except IndexError:
         await _stale_resume_picker(callback)
+        return
+
+    target_cwd = entry.cwd or state.cwd
+    if not entry.transcript_path.is_file():
+        await callback.message.edit_text(t("ui.resume_target_missing"), reply_markup=None)
+        return
+    config_id = config_id_for_channel(key)
+    if not _same_cwd(target_cwd, state.cwd):
+        if config_id is None or not await topic_config.update_engine_cwd(
+            config_id, entry.provider, target_cwd
+        ):
+            await callback.message.edit_text(t("ui.resume_config_write_failed"), reply_markup=None)
+            return
+        runtime = resolve_topic_runtime_config(topic_config.get_topic(config_id), bot_defaults)
+
+    if runtime.exec_mode == "subprocess":
+        if not is_engine_available(entry.provider):
+            await callback.answer(t("ui.agent_cli_not_found"), show_alert=True)
+            return
+        if message_queue is not None and message_queue.is_busy(key):
+            await callback.answer(t("ui.exec_mode_busy"), show_alert=True)
+            return
+        if not entry.transcript_path.is_file():
+            await callback.message.edit_text(t("ui.resume_target_missing"), reply_markup=None)
+            return
+        current_sid = session_manager.get_current_session_id(key)
+        if (
+            config_id is not None
+            and runtime.engine != entry.provider
+            and not await topic_config.update_engine(config_id, entry.provider)
+        ):
+            await callback.message.edit_text(t("ui.resume_config_write_failed"), reply_markup=None)
+            return
+        await session_manager.override_session(key, entry.session_id, provider=entry.provider)
+        session_manager.save_mapping()
+        picker_store.drop(token)
+        message_key = (
+            "ui.resume_already_on_it" if current_sid == entry.session_id else "ui.resume_switched"
+        )
+        await callback.message.edit_text(
+            t(message_key, sid=entry.session_id[:8]), reply_markup=None, parse_mode="HTML"
+        )
+        await _replay_last_assistant_message(callback.message, entry, key, session_manager)
         return
 
     await _answer_callback_safely(callback, t("ui.resume_starting"))
@@ -640,11 +796,11 @@ async def on_resume_cancel(callback: CallbackQuery, picker_store: PickerStore) -
 @router.message(Command("stream"))
 async def handle_stream_mode(message: Message, topic_config: TopicConfig) -> None:
     """Show a 3-button picker to switch stream_mode for the current topic."""
-    _, thread_id = channel_key(message)
-    if thread_id is None:
+    config_id = config_id_for_channel(channel_key(message))
+    if config_id is None:
         await message.answer(t("ui.stream_mode_not_in_forum"))
         return
-    current = topic_config.get_topic(thread_id).stream_mode
+    current = topic_config.get_topic(config_id).stream_mode
     await message.answer(
         t("ui.stream_mode_picker_caption", current=current),
         reply_markup=stream_mode_keyboard(current),
@@ -672,22 +828,23 @@ async def on_stream_mode_click(
         await callback.answer(t("ui.stream_mode_invalid"), show_alert=True)
         return
 
-    thread_id = callback.message.message_thread_id
-    if thread_id is None:
+    key = (callback.message.chat.id, callback.message.message_thread_id)
+    config_id = config_id_for_channel(key)
+    if config_id is None:
         await callback.answer(
             t("ui.stream_mode_not_in_forum"),
             show_alert=True,
         )
         return
 
-    previous_mode = topic_config.get_topic(thread_id).stream_mode
-    ok = await topic_config.update_stream_mode(thread_id, mode)  # type: ignore[arg-type]
+    previous_mode = topic_config.get_topic(config_id).stream_mode
+    ok = await topic_config.update_stream_mode(config_id, mode)  # type: ignore[arg-type]
     if not ok:
         await callback.answer(t("ui.stream_mode_write_failed"), show_alert=True)
         return
     if previous_mode == "live" and mode != "live" and tmux_manager is not None:
         await tmux_manager.close_buffer(
-            (callback.message.chat.id, thread_id),
+            key,
         )
 
     # Refresh both caption and keyboard so the visible current value matches the checkmark.
@@ -705,11 +862,11 @@ async def on_stream_mode_click(
 @router.message(Command("mode"))
 async def handle_mode_command(message: Message, topic_config: TopicConfig) -> None:
     """Show a 2-button picker to switch exec_mode for the current topic."""
-    _, thread_id = channel_key(message)
-    if thread_id is None:
+    config_id = config_id_for_channel(channel_key(message))
+    if config_id is None:
         await message.answer(t("ui.exec_mode_not_in_forum"))
         return
-    current = topic_config.get_topic(thread_id).exec_mode
+    current = topic_config.get_topic(config_id).exec_mode
     await message.answer(
         _exec_mode_picker_caption(current),
         reply_markup=exec_mode_keyboard(current),
@@ -747,13 +904,13 @@ async def on_exec_mode_click(
         await callback.answer(t("ui.exec_mode_invalid"), show_alert=True)
         return
 
-    thread_id = callback.message.message_thread_id
-    if thread_id is None:
+    key = (callback.message.chat.id, callback.message.message_thread_id)
+    config_id = config_id_for_channel(key)
+    if config_id is None:
         await callback.answer(t("ui.exec_mode_not_in_forum"), show_alert=True)
         return
 
-    key = (callback.message.chat.id, thread_id)
-    previous_mode = topic_config.get_topic(thread_id).exec_mode
+    previous_mode = topic_config.get_topic(config_id).exec_mode
 
     if new_mode == previous_mode:
         await callback.answer(t("ui.exec_mode_already", mode=_exec_mode_label(new_mode)))
@@ -771,16 +928,16 @@ async def on_exec_mode_click(
     if previous_mode == "tmux" and new_mode == "subprocess":
         await tmux_manager.kill(key)
 
-    ok = await topic_config.update_exec_mode(thread_id, new_mode)
+    ok = await topic_config.update_exec_mode(config_id, new_mode)
     if not ok:
         await callback.answer(t("ui.exec_mode_write_failed"), show_alert=True)
         return
 
     user_id = callback.from_user.id if callback.from_user else None
     logger.info(
-        "exec_mode switched: user_id=%s thread_id=%s previous_mode=%s new_mode=%s",
+        "exec_mode switched: user_id=%s config_id=%s previous_mode=%s new_mode=%s",
         user_id,
-        thread_id,
+        config_id,
         previous_mode,
         new_mode,
     )
@@ -800,11 +957,11 @@ async def on_exec_mode_click(
 @router.message(Command("engine"))
 async def handle_engine_command(message: Message, topic_config: TopicConfig) -> None:
     """Show provider engine picker for the current forum topic."""
-    _, thread_id = channel_key(message)
-    if thread_id is None:
+    config_id = config_id_for_channel(channel_key(message))
+    if config_id is None:
         await message.answer(t("ui.engine_not_in_forum"))
         return
-    settings = topic_config.get_topic(thread_id)
+    settings = topic_config.get_topic(config_id)
     await message.answer(
         t(
             "ui.engine_picker_caption",
@@ -832,12 +989,12 @@ async def on_engine_click(
         return
 
     _, _, raw_value = callback.data.partition(":")
-    thread_id = callback.message.message_thread_id
-    if thread_id is None:
+    key = (callback.message.chat.id, callback.message.message_thread_id)
+    config_id = config_id_for_channel(key)
+    if config_id is None:
         await callback.answer(t("ui.engine_not_in_forum"), show_alert=True)
         return
-    key = (callback.message.chat.id, thread_id)
-    current = topic_config.get_topic(thread_id)
+    current = topic_config.get_topic(config_id)
 
     if tmux_manager.is_processing(key) or message_queue.is_busy(key):
         await callback.answer(t("ui.exec_mode_busy"), show_alert=True)
@@ -853,9 +1010,9 @@ async def on_engine_click(
         return
 
     if current.models:
-        ok = await topic_config.update_engine(thread_id, new_engine)
+        ok = await topic_config.update_engine(config_id, new_engine)
     else:
-        ok = await topic_config.update_engine_model(thread_id, new_engine, None)
+        ok = await topic_config.update_engine_model(config_id, new_engine, None)
     if not ok:
         await callback.answer(t("ui.engine_write_failed"), show_alert=True)
         return
@@ -865,9 +1022,9 @@ async def on_engine_click(
     await session_manager.clear_provider_session(key)
 
     logger.info(
-        "engine switched: user_id=%s thread_id=%s previous=%s new=%s model=%s",
+        "engine switched: user_id=%s config_id=%s previous=%s new=%s model=%s",
         callback.from_user.id if callback.from_user else None,
-        thread_id,
+        config_id,
         current.engine,
         new_engine,
         current.models.get(new_engine, current.model),

@@ -2,6 +2,8 @@
 
 [English version](README.md)
 
+[Запуск с Codex на Windows](README.windows.md)
+
 Telegram AI Agent - open-source Telegram-бот для управления Claude Code и Codex
 CLI на вашем VPS. Он превращает Telegram в удаленный интерфейс для вайбкодинга:
 создаете топик под проект, пишете задачи с телефона, прикладываете файлы или

@@ -1,5 +1,7 @@
 # Telegram AI Agent
 
+[Run with Codex on Windows](README.windows.md)
+
 [Русская версия](README.ru.md)
 
 Telegram AI Agent is an open-source Telegram bot for controlling Claude Code and

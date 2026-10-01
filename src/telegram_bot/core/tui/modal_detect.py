@@ -38,6 +38,8 @@ import re
 import subprocess
 from typing import TypedDict
 
+from telegram_bot.core.services.windows_pty import run_tmux
+
 
 class ModalDiagSignals(TypedDict):
     """Structured return of `collect_diagnostic_signals`. Each field
@@ -550,7 +552,7 @@ async def capture_pane(session_name: str) -> str:
     """
     try:
         result = await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             ["tmux", "capture-pane", "-t", f"={session_name}:", "-p"],
             capture_output=True,
             text=True,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -13,7 +15,6 @@ from telegram_bot.core.messages import t
 from telegram_bot.core.services.resume_listing import SessionEntry
 
 RESUME_PAGE_SIZE = 9
-_RESUME_BUTTONS_PER_ROW = 3
 _TELEGRAM_BUTTON_TEXT_LIMIT = 64
 
 
@@ -85,7 +86,10 @@ def exec_mode_keyboard(current: str | None = None) -> InlineKeyboardMarkup:
                     callback_data="exec_mode:subprocess",
                 ),
                 InlineKeyboardButton(
-                    text=_label("tmux", t("ui.exec_mode_label_tmux")),
+                    text=_label(
+                        "tmux",
+                        "TUI (ConPTY)" if os.name == "nt" else t("ui.exec_mode_label_tmux"),
+                    ),
                     callback_data="exec_mode:tmux",
                 ),
             ],
@@ -127,21 +131,22 @@ def resume_keyboard(
     page = max(0, min(page, total_pages - 1))
     start = page * RESUME_PAGE_SIZE
     rows: list[list[InlineKeyboardButton]] = []
-    _ = current_session_id
     end = min(start + RESUME_PAGE_SIZE, len(entries))
-    row: list[InlineKeyboardButton] = []
     for idx in range(start, end):
-        row.append(
-            InlineKeyboardButton(
-                text=str(idx + 1),
-                callback_data=f"rs:s:{token}:{idx}",
-            )
+        entry = entries[idx]
+        title = entry.title or entry.preview or entry.session_id[:8]
+        project = entry.cwd.name if entry.cwd is not None else ""
+        label = f"{idx + 1}. {project}: {title}" if project else f"{idx + 1}. {title}"
+        if entry.session_id == current_session_id:
+            label = f"✅ {label}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_truncate_button_text(label),
+                    callback_data=f"rs:s:{token}:{idx}",
+                )
+            ]
         )
-        if len(row) == _RESUME_BUTTONS_PER_ROW:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
 
     rows.append(
         [

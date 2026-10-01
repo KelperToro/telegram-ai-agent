@@ -30,6 +30,7 @@ BOT_RESERVED_COMMANDS = frozenset(
         "/day",
         "/tui",
         "/codex_update",
+        "/goal",
     }
 )
 

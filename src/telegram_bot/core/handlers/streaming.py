@@ -27,7 +27,11 @@ from telegram_bot.core.services.telegram_utils import (
     send_placeholder,
 )
 from telegram_bot.core.services.tmux_manager import TmuxManager
-from telegram_bot.core.services.topic_config import StreamMode, TopicConfig
+from telegram_bot.core.services.topic_config import (
+    StreamMode,
+    TopicConfig,
+    config_id_for_channel,
+)
 from telegram_bot.core.types import ChannelKey
 from telegram_bot.core.types import channel_key as get_channel_key
 from telegram_bot.core.utils.telegram_html import (
@@ -79,8 +83,7 @@ def _resolve_stream_mode(
     """Pick the stream_mode for a channel, falling back to verbose when unknown."""
     if topic_config is None:
         return _DEFAULT_CALLER_STREAM_MODE
-    thread_id = channel_key[1]
-    return topic_config.get_topic(thread_id).stream_mode
+    return topic_config.get_topic(config_id_for_channel(channel_key)).stream_mode
 
 
 def stream_event_action(mode: StreamMode | str, event: StreamEvent) -> DeliveryAction:
@@ -269,7 +272,7 @@ async def ensure_exec_mode_ready(
             )
             return True
 
-        settings = topic_config.get_topic(key[1])
+        settings = topic_config.get_topic(config_id_for_channel(key))
         if settings.exec_mode != "tmux":
             return True
 
@@ -287,9 +290,9 @@ async def ensure_exec_mode_ready(
         engine = current_session.engine
         model = current_session.model
 
-        thread_id = key[1]
+        config_id = config_id_for_channel(key)
         requested_engine = (
-            topic_config.get_topic(thread_id).engine if thread_id is not None else engine
+            topic_config.get_topic(config_id).engine if config_id is not None else engine
         )
         available_engine = choose_available_engine(requested_engine)
         if available_engine is None:
@@ -649,7 +652,9 @@ async def send_streaming_response(
     tmux_required = False
     if topic_config is not None:
         try:
-            tmux_required = topic_config.get_topic(channel_key[1]).exec_mode == "tmux"
+            tmux_required = (
+                topic_config.get_topic(config_id_for_channel(channel_key)).exec_mode == "tmux"
+            )
         except Exception:
             logger.warning("Failed to resolve exec_mode for %s", channel_key, exc_info=True)
             await message.answer(t("ui.tmux_failed", exc="topic config is unreadable"))

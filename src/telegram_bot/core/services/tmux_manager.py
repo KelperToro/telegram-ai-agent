@@ -18,7 +18,7 @@ Runtime contract (Wave 2 TUI):
   - Transcript path is derived via `tui.paths.transcript_path(cwd, session_id)`
     and polled for existence against a shared 30 s clock (Decision 7).
   - Writes to CC go through `tui.send_keys.send_text_to_tmux`; Escape / /clear
-    are issued as separate `subprocess.run(["tmux", "send-keys", ...])`
+    are issued as separate `run_tmux(["tmux", "send-keys", ...])`
     invocations with list-args (no shell=True).
   - `send_direct` and `send_stream` both route user prompts through
     `_safe_send_and_enter` (Wave 3 B1 fix) — capture → send-keys -l →
@@ -31,7 +31,7 @@ Runtime contract (Wave 2 TUI):
     missing on disk.
   - `restore_all` / `resume_tails` live in `tmux_recovery.py`.
 
-All `subprocess.run` invocations use list-args to defeat command injection.
+All `run_tmux` invocations use list-args to defeat command injection.
 `subprocess`, `capture_pane`, `send_text_to_tmux`, `send_enter`,
 `await_prompt_ready` are imported at module level so tests can continue to
 patch them via `telegram_bot.core.services.tmux_manager.<name>`.
@@ -119,12 +119,13 @@ from telegram_bot.core.services.tmux_state import (
 from telegram_bot.core.services.tmux_state import (
     peek_saved_session as _peek_saved_session_impl,
 )
-from telegram_bot.core.services.topic_config import Engine, TopicConfig
+from telegram_bot.core.services.topic_config import Engine, TopicConfig, config_id_for_channel
 from telegram_bot.core.services.topic_runtime import (
     BotDefaults,
     TopicRuntimeConfig,
     resolve_topic_runtime_config,
 )
+from telegram_bot.core.services.windows_pty import run_tmux
 from telegram_bot.core.tui.capture import await_prompt_ready
 from telegram_bot.core.tui.modal_detect import (
     DEFAULT_SETTLE_SEC,
@@ -882,7 +883,7 @@ class TmuxManager:
         - Kills any previous tmux session with the same name.
         - Records a shared 30s deadline used by both `await_prompt_ready`
           and the subsequent transcript poll-for-existence (Decision 7).
-        - Wave 3 B4: wraps all sync `subprocess.run` in `asyncio.to_thread`
+        - Wave 3 B4: wraps all sync `run_tmux` in `asyncio.to_thread`
           so the tmux server handshake no longer blocks the event loop
           (20-80 ms on idle, seconds under load).
         - On readiness-timeout `await_prompt_ready` already kills the
@@ -925,10 +926,10 @@ class TmuxManager:
         ]
         tmux_env = await asyncio.to_thread(
             sanitized_tmux_environment,
-            run=subprocess.run,
+            run=run_tmux,
         )
         result = await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             new_session_argv,
             capture_output=True,
             text=True,
@@ -948,7 +949,7 @@ class TmuxManager:
                 )
                 await asyncio.sleep(_TMUX_NEW_SESSION_RETRY_DELAY_SEC)
                 result = await asyncio.to_thread(
-                    subprocess.run,
+                    run_tmux,
                     new_session_argv,
                     capture_output=True,
                     text=True,
@@ -967,7 +968,7 @@ class TmuxManager:
         if not ready:
             with contextlib.suppress(subprocess.SubprocessError):
                 await asyncio.to_thread(
-                    subprocess.run,
+                    run_tmux,
                     ["tmux", "kill-session", "-t", f"={name}"],
                     capture_output=True,
                     timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -1016,14 +1017,24 @@ class TmuxManager:
                 pane = await capture_pane(session_name)
             except (OSError, subprocess.SubprocessError):
                 return False
-            if (
-                not trust_handled
-                and "Do you trust the contents of this directory?" in pane
+            old_trust_modal = (
+                "Do you trust the contents of this directory?" in pane
                 and "1. Yes, continue" in pane
-            ):
+            )
+            new_trust_modal = "Trust this folder?" in pane and "1. Trust and continue" in pane
+            if old_trust_modal or new_trust_modal:
+                if trust_handled:
+                    await asyncio.sleep(0.5)
+                    continue
                 await asyncio.to_thread(
-                    subprocess.run,
-                    ["tmux", "send-keys", "-t", f"={session_name}:", "1", "Enter"],
+                    run_tmux,
+                    [
+                        "tmux",
+                        "send-keys",
+                        "-t",
+                        f"={session_name}:",
+                        *(["1", "Enter"] if old_trust_modal else ["Enter"]),
+                    ],
                     capture_output=True,
                     check=False,
                 )
@@ -1035,7 +1046,7 @@ class TmuxManager:
             await asyncio.sleep(0.5)
         with contextlib.suppress(subprocess.SubprocessError):
             await asyncio.to_thread(
-                subprocess.run,
+                run_tmux,
                 ["tmux", "kill-session", "-t", f"={session_name}"],
                 capture_output=True,
                 timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -1149,7 +1160,7 @@ class TmuxManager:
             return
         try:
             await asyncio.to_thread(
-                subprocess.run,
+                run_tmux,
                 [
                     "tmux",
                     "send-keys",
@@ -2540,7 +2551,7 @@ class TmuxManager:
             logger.info("TUI_IO: cancel session=%s", state.session_name)
             try:
                 await asyncio.to_thread(
-                    subprocess.run,
+                    run_tmux,
                     ["tmux", "send-keys", "-t", f"={state.session_name}:", "Escape"],
                     capture_output=True,
                     timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -2823,7 +2834,7 @@ class TmuxManager:
         """Switch live tmux to a selected transcript, or start it if dormant."""
         async with self._get_channel_lock(channel_key):
             self._ensure_state_store_writable()
-            settings = topic_config.get_topic(channel_key[1])
+            settings = topic_config.get_topic(config_id_for_channel(channel_key))
             runtime = resolve_topic_runtime_config(settings, defaults)
             original_runtime = runtime
 
@@ -2832,8 +2843,8 @@ class TmuxManager:
             if not target_transcript_path.exists():
                 return SwitchResult(kind="target_missing")
 
-            thread_id = channel_key[1]
-            if thread_id is None:
+            config_id = config_id_for_channel(channel_key)
+            if config_id is None:
                 return SwitchResult(kind="config_write_failed")
 
             captured = self._sessions.get(channel_key)
@@ -2844,7 +2855,7 @@ class TmuxManager:
             target_model = models.get(target_provider)
             if mode_changed and engine_changed:
                 ok = await topic_config.update_engine_model_exec_mode(
-                    thread_id,
+                    config_id,
                     target_provider,
                     None,
                     "tmux",
@@ -2858,15 +2869,15 @@ class TmuxManager:
                     exec_mode="tmux",
                 )
             elif mode_changed:
-                ok = await topic_config.update_exec_mode(thread_id, "tmux")
+                ok = await topic_config.update_exec_mode(config_id, "tmux")
                 if not ok:
                     return SwitchResult(kind="config_write_failed")
                 runtime = replace(runtime, exec_mode="tmux")
             elif engine_changed:
                 if models:
-                    ok = await topic_config.update_engine(thread_id, target_provider)
+                    ok = await topic_config.update_engine(config_id, target_provider)
                 else:
-                    ok = await topic_config.update_engine_model(thread_id, target_provider, None)
+                    ok = await topic_config.update_engine_model(config_id, target_provider, None)
                 if not ok:
                     return SwitchResult(kind="config_write_failed")
                 runtime = replace(runtime, engine=target_provider, model=target_model)
@@ -2926,7 +2937,7 @@ class TmuxManager:
                 self._save_state()
                 await self._rollback_topic_runtime(
                     topic_config=topic_config,
-                    thread_id=thread_id,
+                    thread_id=config_id,
                     runtime=original_runtime,
                 )
                 return SwitchResult(
@@ -3255,8 +3266,8 @@ class TmuxManager:
         session_manager: object | None = None,
     ) -> tuple[bool, str | None]:
         """Return whether topic config was read and its current MCP profile."""
-        thread_id = channel_key[1]
-        if thread_id is None:
+        config_id = config_id_for_channel(channel_key)
+        if config_id is None:
             return False, None
 
         owners = (session_manager, self)
@@ -3271,7 +3282,7 @@ class TmuxManager:
             if not callable(get_topic):
                 continue
             try:
-                topic = get_topic(thread_id)
+                topic = get_topic(config_id)
             except Exception:
                 logger.warning("Failed to read topic MCP config for %s", channel_key, exc_info=True)
                 continue

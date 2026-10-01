@@ -2,8 +2,8 @@
 
 Codex CLI does not accept Claude-style ``--mcp-config`` files. The bot passes
 Codex TOML overrides that point each configured MCP server at this runner. The
-runner reads the original JSON config inside the child process and execs the
-real server with its env, keeping secret env values out of Codex argv.
+runner reads the original JSON config inside the child process and launches
+the real server with its env, keeping secret env values out of Codex argv.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -54,10 +55,11 @@ def _load_config(mcp_config: str) -> tuple[dict[str, Any], str]:
             metadata = os.fstat(handle.fileno())
             if not stat.S_ISREG(metadata.st_mode):
                 raise ValueError(f"MCP config must be a regular file: {path}")
-            if metadata.st_uid != os.getuid():
-                raise ValueError(f"MCP config must be owned by the service user: {path}")
-            if metadata.st_mode & 0o022:
-                raise ValueError(f"MCP config is group/world writable: {path}")
+            if os.name != "nt":
+                if metadata.st_uid != getattr(os, "getuid")():  # noqa: B009
+                    raise ValueError(f"MCP config must be owned by the service user: {path}")
+                if metadata.st_mode & 0o022:
+                    raise ValueError(f"MCP config is group/world writable: {path}")
             raw = handle.read()
         data = json.loads(raw.decode("utf-8"))
     except OSError as exc:
@@ -185,7 +187,7 @@ def load_mcp_server(
     *,
     expected_digest: str | None = None,
 ) -> tuple[str, list[str], dict[str, str]]:
-    """Load one MCP server entry and return ``command, argv, env`` for execvpe."""
+    """Load one MCP server entry and return ``command, argv, env`` for launch."""
     if not _SERVER_NAME_RE.fullmatch(server_name):
         raise ValueError(f"Invalid MCP server name: {server_name!r}")
 
@@ -235,6 +237,14 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if os.name == "nt":
+        # Windows cannot reliably replace this Python process with execvpe.
+        # Inherit stdio so Codex still speaks MCP directly to the child server.
+        try:
+            return subprocess.run(exec_argv, env=env, check=False).returncode
+        except OSError as exc:
+            print(f"Could not start MCP server {argv[1]!r}: {exc}", file=sys.stderr)
+            return 1
     os.execvpe(command, exec_argv, env)
     return 0
 

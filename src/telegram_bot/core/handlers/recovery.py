@@ -18,7 +18,7 @@ from telegram_bot.core.services.live_buffer import LiveStatusBuffer
 from telegram_bot.core.services.rich_sender import send_rich_final_answer
 from telegram_bot.core.services.telegram_utils import SendOutcome, send_html_with_fallback
 from telegram_bot.core.services.tmux_manager import TmuxManager
-from telegram_bot.core.services.topic_config import TopicConfig
+from telegram_bot.core.services.topic_config import TopicConfig, config_id_for_channel
 from telegram_bot.core.types import ChannelKey
 
 logger = logging.getLogger(__name__)
@@ -222,7 +222,7 @@ def make_recovery_on_event(
             )
             if event.type in {"status", "text", "result_message"} and not event.content.strip():
                 return None
-            stream_mode = topic_config.get_topic(thread_id).stream_mode
+            stream_mode = topic_config.get_topic(config_id_for_channel(channel_key)).stream_mode
             action = stream_event_action(stream_mode, event)
             if action == "drop":
                 return None

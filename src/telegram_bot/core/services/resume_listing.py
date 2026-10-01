@@ -24,17 +24,26 @@ class SessionEntry:
     preview: str
     mtime: float
     size_bytes: int
+    cwd: Path | None = None
+    title: str | None = None
 
 
-def list_sessions(cwd: str | Path, *, home: Path | None = None) -> list[SessionEntry]:
+def list_sessions(
+    cwd: str | Path, *, home: Path | None = None, all_codex: bool = False
+) -> list[SessionEntry]:
     """Return Claude + Codex TUI sessions scoped to cwd, newest first."""
     home = home or Path.home()
     cwd_path = Path(cwd)
     entries = [
         *_list_claude_sessions(cwd_path, home),
-        *_list_codex_sessions(cwd_path, home),
+        *_list_codex_sessions(cwd_path, home, all_cwds=all_codex),
     ]
-    return sorted(entries, key=lambda entry: entry.mtime, reverse=True)
+    newest: dict[tuple[str, str], SessionEntry] = {}
+    for entry in entries:
+        key = (entry.provider, entry.session_id)
+        if key not in newest or entry.mtime > newest[key].mtime:
+            newest[key] = entry
+    return sorted(newest.values(), key=lambda entry: entry.mtime, reverse=True)
 
 
 def _list_claude_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
@@ -62,8 +71,12 @@ def _list_claude_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
     return entries
 
 
-def _list_codex_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
-    root = home / ".codex" / "sessions"
+def _list_codex_sessions(cwd: Path, home: Path, *, all_cwds: bool = False) -> list[SessionEntry]:
+    root = (
+        Path(os.environ["CODEX_HOME"]) / "sessions"
+        if "CODEX_HOME" in os.environ
+        else home / ".codex" / "sessions"
+    )
     if not root.exists():
         return []
     entries: list[SessionEntry] = []
@@ -72,7 +85,9 @@ def _list_codex_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
         if meta is None:
             continue
         session_id, session_cwd = meta
-        if not _same_cwd(session_cwd, cwd) or not _CODEX_SESSION_ID_RE.fullmatch(session_id):
+        if (not all_cwds and not _same_cwd(session_cwd, cwd)) or not _CODEX_SESSION_ID_RE.fullmatch(
+            session_id
+        ):
             continue
         stat = _safe_stat(path)
         if stat is None:
@@ -85,6 +100,7 @@ def _list_codex_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
                 preview=_preview_codex(path) or session_id[:8],
                 mtime=stat.st_mtime,
                 size_bytes=stat.st_size,
+                cwd=Path(session_cwd),
             )
         )
     return entries
@@ -188,6 +204,8 @@ def _preview_codex(path: Path) -> str:
         if not isinstance(payload, dict) or payload.get("type") != "user_message":
             continue
         text = _extract_text(payload.get("message") or payload.get("text"))
+        if "</telegram-context>" in text:
+            text = text.split("</telegram-context>", 1)[1].strip()
         if _meaningful_preview(text):
             return _truncate(text)
     return ""
@@ -200,7 +218,7 @@ def _codex_meta(path: Path, *, max_records: int = 3) -> tuple[str, str] | None:
         if not isinstance(data, dict) or data.get("type") != "session_meta":
             continue
         payload = data.get("payload")
-        if not isinstance(payload, dict) or payload.get("originator") != "codex-tui":
+        if not isinstance(payload, dict):
             continue
         source = payload.get("source")
         if isinstance(source, dict) and "subagent" in source:

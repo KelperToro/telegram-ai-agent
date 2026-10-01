@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from telegram_bot.core.types import ChannelKey
+
 logger = logging.getLogger(__name__)
 
 # prompts/ is scanned lazily so a new prompts/<mode>.md can be dropped at runtime
@@ -46,6 +48,14 @@ _CORE_PROMPT_MODES: set[str] = {"task", "free"}
 _EXTRA_PROMPT_MODES: set[str] = set()
 
 _valid_modes_cache: tuple[int, set[str]] = (-1, set())
+
+
+def config_id_for_channel(channel_key: ChannelKey) -> int | None:
+    """Resolve forum and private chat settings without changing forum IDs."""
+    chat_id, thread_id = channel_key
+    if thread_id is not None:
+        return thread_id
+    return -chat_id if chat_id > 0 else None
 
 
 def _normalize_model(model: object) -> str | None:
@@ -486,6 +496,29 @@ class TopicConfig:
             field_name="engine",
             value=engine,
             log_label="update_engine",
+        )
+
+    async def update_cwd(self, thread_id: int, cwd: str | Path) -> bool:
+        """Use the selected saved session's working directory for later turns."""
+        path = Path(cwd).resolve()
+        if not path.is_dir():
+            return False
+        return await self._update_topic_field(
+            thread_id=thread_id,
+            field_name="cwd",
+            value=str(path),
+            log_label="update_cwd",
+        )
+
+    async def update_engine_cwd(self, thread_id: int, engine: Engine, cwd: str | Path) -> bool:
+        """Select an existing thread and its project in one config write."""
+        path = Path(cwd).resolve()
+        if engine not in _VALID_ENGINES or not path.is_dir():
+            return False
+        return await self._update_topic_fields(
+            thread_id=thread_id,
+            values={"engine": engine, "cwd": str(path)},
+            log_label="update_engine_cwd",
         )
 
     async def update_model(self, thread_id: int, model: str | None) -> bool:

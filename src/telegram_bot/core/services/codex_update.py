@@ -173,8 +173,17 @@ class CodexUpdateService:
 
     @staticmethod
     async def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+        if os.name == "nt":
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            with contextlib.suppress(TimeoutError, ProcessLookupError):
+                await asyncio.wait_for(process.wait(), timeout=5)
+            return
         with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            getattr(os, "killpg")(  # noqa: B009
+                getattr(os, "getpgid")(process.pid),  # noqa: B009
+                getattr(signal, "SIGKILL"),  # noqa: B009
+            )
         with contextlib.suppress(TimeoutError, ProcessLookupError):
             await asyncio.wait_for(process.wait(), timeout=5)
 

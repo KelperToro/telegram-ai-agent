@@ -1,16 +1,16 @@
 """Tmux session spawning helpers — async/sync variants and pane utilities.
 
-Extracted from `tmux_manager.py`. All `subprocess.run` invocations in the
+Extracted from `tmux_manager.py`. All `run_tmux` invocations in the
 async path are wrapped in `asyncio.to_thread` (Wave 3 B4 fix): running
-subprocess.run synchronously inside an async function blocks the event
+run_tmux synchronously inside an async function blocks the event
 loop during the tmux server handshake (20-80 ms typically; seconds under
 load). `asyncio.to_thread` releases the loop while the external process
 runs.
 
 `subprocess` is imported at module level so tests can monkey-patch
-`telegram_bot.core.services.tmux_spawn.subprocess.run`. Callers in the
+`telegram_bot.core.services.tmux_spawn.run_tmux`. Callers in the
 manager facade keep their own `subprocess` import for patches that target
-`tmux_manager.subprocess.run` directly (legacy test API).
+`tmux_manager.run_tmux` directly (legacy test API).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from pathlib import Path
 
 from telegram_bot.core.services.process_cleanup import cleanup_tmux_runtime
 from telegram_bot.core.services.providers import agent_env_prefix, agent_process_env
+from telegram_bot.core.services.windows_pty import run_tmux
 from telegram_bot.core.types import ChannelKey
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ MODAL_WATCHDOG_INTERVAL_SEC = 8.0
 
 def sanitized_tmux_environment(
     *,
-    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    run: Callable[..., subprocess.CompletedProcess[str]] = run_tmux,
 ) -> dict[str, str]:
     """Return a safe tmux env and scrub inherited secrets from a live server."""
     env = agent_process_env()
@@ -87,7 +88,7 @@ def sanitized_tmux_environment(
 def tmux_pane_inherits_disallowed_environment(
     session_name: str,
     *,
-    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    run: Callable[..., subprocess.CompletedProcess[str]] = run_tmux,
 ) -> bool:
     """Detect legacy panes that inherited service-only environment variables."""
     env = agent_process_env()
@@ -134,7 +135,7 @@ def tmux_alive(session_name: str) -> bool:
     Kept synchronous because it is called from bot-startup (restore_all)
     and from non-async paths. Async callers should use `asyncio.to_thread`.
     """
-    result = subprocess.run(["tmux", "has-session", "-t", f"={session_name}"], capture_output=True)
+    result = run_tmux(["tmux", "has-session", "-t", f"={session_name}"], capture_output=True)
     return result.returncode == 0
 
 
@@ -151,7 +152,7 @@ async def query_pane_width(session_name: str) -> int | None:
     enabled, so the overhead is off the hot path in prod."""
     try:
         result = await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             ["tmux", "display-message", "-p", "-t", f"={session_name}:", "#{pane_width}"],
             capture_output=True,
             text=True,
@@ -191,11 +192,11 @@ def spawn_tmux_sync(
     try:
         session_dir.mkdir(parents=True, exist_ok=True)
         cleanup_tmux_runtime(session_name=name, runtime_path=str(session_dir / "mcp.runtime.json"))
-        tmux_env = sanitized_tmux_environment(run=subprocess.run)
+        tmux_env = sanitized_tmux_environment(run=run_tmux)
         sanitized_startup = startup_cmd
         if startup_cmd[:2] != ["env", "-i"]:
             sanitized_startup = [*agent_env_prefix(binary=startup_cmd[0]), *startup_cmd]
-        result = subprocess.run(
+        result = run_tmux(
             [
                 "tmux",
                 "new-session",

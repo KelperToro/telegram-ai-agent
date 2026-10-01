@@ -4,7 +4,7 @@
 navigation keys, digit replies to permission dialogs, and refresh/expand/close
 controls. `/tail` is kept as an alias for one deployment cycle after the
 2026-04-23 rename. All I/O goes through `tmux` via
-`asyncio.to_thread(subprocess.run, [...])` using list-args (no shell) so
+`asyncio.to_thread(run_tmux, [...])` using list-args (no shell) so
 command-injection is impossible.
 
 Stale-keyboard guards (R7):
@@ -37,6 +37,7 @@ from telegram_bot.core.services.tmux_modal_watchdog import (
     AUDIT_SOURCE_USER_COMMAND,
     log_alert_audit,
 )
+from telegram_bot.core.services.windows_pty import run_tmux
 from telegram_bot.core.tui.capture import escape_pane_for_html
 from telegram_bot.core.tui.modal_alert import render_modal_idle_alert
 from telegram_bot.core.tui.tail_keyboard import (
@@ -226,7 +227,7 @@ async def _handle_tail_entry(
 
     try:
         result = await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             _capture_pane_cmd(session_name),
             capture_output=True,
             text=True,
@@ -362,7 +363,7 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
 
     try:
         await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             _send_keys_cmd(session_name, keys),
             check=True,
         )
@@ -422,7 +423,7 @@ async def _rerender(
     """
     try:
         result = await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             _capture_pane_cmd(session_name),
             capture_output=True,
             text=True,

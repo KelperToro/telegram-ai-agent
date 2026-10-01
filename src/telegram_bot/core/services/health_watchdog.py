@@ -34,6 +34,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from telegram_bot.core.services.windows_pty import run_tmux
+
 logger = logging.getLogger(__name__)
 
 _GB = 1024**3
@@ -119,7 +121,7 @@ def read_tmux_server_pid() -> int | None:
     payload both map to None.
     """
     try:
-        result = subprocess.run(
+        result = run_tmux(
             ["tmux", "display-message", "-p", "#{pid}"],
             capture_output=True,
             text=True,

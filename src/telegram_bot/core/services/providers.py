@@ -53,7 +53,11 @@ def _is_safe_owned_executable(path: Path) -> bool:
         return False
     if not path.is_file() or not os.access(path, os.X_OK):
         return False
-    return stat.st_uid == os.getuid() and stat.st_mode & 0o022 == 0
+    if os.name == "nt":
+        # Windows has ACLs rather than POSIX uid/mode ownership. Restrict
+        # launchers to the executable formats used by Codex on Windows.
+        return path.suffix.lower() in {".exe", ".cmd"}
+    return stat.st_uid == getattr(os, "getuid")() and stat.st_mode & 0o022 == 0  # noqa: B009
 
 
 def _configured_claude_binary() -> Path | None:
@@ -169,6 +173,8 @@ def codex_npm_prefix() -> Path:
     configured = os.getenv("CODEX_NPM_PREFIX") or os.getenv("TELEGRAM_CODEX_NPM_PREFIX")
     if configured:
         return Path(configured).expanduser()
+    if os.name == "nt" and os.getenv("APPDATA"):
+        return Path(os.environ["APPDATA"]) / "npm"
     return Path.home() / ".npm-global"
 
 
@@ -194,6 +200,18 @@ _CODEX_ENV_ALLOWLIST = {
     "NO_COLOR",
     "TERM",
     "TMUX_TMPDIR",
+    "CODEX_HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "HOMEDRIVE",
+    "HOMEPATH",
     *_AGENT_APP_ENV,
 }
 
@@ -254,13 +272,16 @@ def codex_process_env(
     if _use_codex_bot_home():
         _ensure_codex_global_skill_links()
         env["CODEX_HOME"] = str(_CODEX_BOT_HOME)
-    else:
+    elif os.name != "nt":
         env.pop("CODEX_HOME", None)
     return env
 
 
 def codex_env_prefix(*, codex_bin: str | Path | None = None) -> list[str]:
     env = codex_process_env(codex_bin=codex_bin)
+    if os.name == "nt":
+        env["TERM"] = "xterm-256color"
+        return ["env", "-i", *(f"{key}={value}" for key, value in sorted(env.items()))]
     keys = ["CODEX_HOME", "PATH"]
     inherited_keys = [
         "HOME",
@@ -285,6 +306,8 @@ def _codex_sessions_root(home: Path | None = None) -> Path:
         return home / ".codex" / "sessions"
     if _use_codex_bot_home():
         return _CODEX_BOT_HOME / "sessions"
+    if configured := os.getenv("CODEX_HOME"):
+        return Path(configured) / "sessions"
     return Path.home() / ".codex" / "sessions"
 
 
@@ -558,13 +581,26 @@ class CodexAdapter:
                 return str(configured)
             raise RuntimeError(f"Unsafe configured Codex binary: {configured}")
 
-        candidates = [
-            _standalone_codex_path(),
-            _CODEX_HOME / "packages" / "standalone" / "current" / "bin" / "codex",
-        ]
-        if found := shutil.which("codex"):
-            candidates.append(Path(found))
-        candidates.append(codex_npm_prefix() / "bin" / "codex")
+        if os.name == "nt":
+            candidates = []
+            if found := shutil.which("codex.exe"):
+                candidates.append(Path(found))
+            local_app_data = os.getenv("LOCALAPPDATA")
+            if local_app_data:
+                candidates.extend(
+                    (Path(local_app_data) / "OpenAI" / "Codex" / "bin").glob("*/codex.exe")
+                )
+            if found := shutil.which("codex.cmd"):
+                candidates.append(Path(found))
+            candidates.append(codex_npm_prefix() / "codex.cmd")
+        else:
+            candidates = [
+                _standalone_codex_path(),
+                _CODEX_HOME / "packages" / "standalone" / "current" / "bin" / "codex",
+            ]
+            if found := shutil.which("codex"):
+                candidates.append(Path(found))
+            candidates.append(codex_npm_prefix() / "bin" / "codex")
 
         for candidate in candidates:
             if candidate.is_absolute() and self._is_safe_binary(candidate):
@@ -572,7 +608,7 @@ class CodexAdapter:
 
         # Return the expected standalone path so process spawn fails loudly
         # instead of searching a service PATH that may not contain Codex.
-        return str(_standalone_codex_path())
+        return str(candidates[0] if candidates else _standalone_codex_path())
 
     def safe_binary(self) -> str | None:
         candidate = Path(self.binary())

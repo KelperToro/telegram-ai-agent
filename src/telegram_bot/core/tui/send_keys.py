@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 import uuid
 from dataclasses import dataclass
+
+from telegram_bot.core.services.windows_pty import run_tmux
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def plan_send_keys(text: str) -> SendKeysPlan:
 async def send_paste(session_name: str, text: str) -> None:
     """Deliver `text` to `session_name` as one bracketed-paste event.
 
-    Steps (all via async-thread subprocess.run):
+    Steps (all via async-thread run_tmux):
       1. `tmux load-buffer -b <unique> -` — push the payload via stdin
          into a named tmux buffer. Stdin avoids ARG_MAX limits and any
          leading-hyphen parsing surprises.
@@ -101,7 +102,7 @@ async def send_paste(session_name: str, text: str) -> None:
     loaded = False
     try:
         await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             ["tmux", "load-buffer", "-b", buffer_name, "-"],
             input=sanitized.encode("utf-8"),
             check=True,
@@ -109,7 +110,7 @@ async def send_paste(session_name: str, text: str) -> None:
         )
         loaded = True
         await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             ["tmux", "paste-buffer", "-p", "-b", buffer_name, "-t", f"={session_name}:"],
             check=True,
             timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -122,7 +123,7 @@ async def send_paste(session_name: str, text: str) -> None:
         # we surface it ourselves via logger.warning when delete fails.
         if loaded:
             cleanup = await asyncio.to_thread(
-                subprocess.run,
+                run_tmux,
                 ["tmux", "delete-buffer", "-b", buffer_name],
                 check=False,
                 capture_output=True,
@@ -154,7 +155,7 @@ async def send_text_to_tmux(
     await send_paste(session_name, text)
     if submit_enter:
         await asyncio.to_thread(
-            subprocess.run,
+            run_tmux,
             ["tmux", "send-keys", "-t", f"={session_name}:", "Enter"],
             check=True,
             timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -163,7 +164,7 @@ async def send_text_to_tmux(
 
 async def send_enter(session_name: str) -> None:
     await asyncio.to_thread(
-        subprocess.run,
+        run_tmux,
         ["tmux", "send-keys", "-t", f"={session_name}:", "Enter"],
         check=True,
         timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -172,7 +173,7 @@ async def send_enter(session_name: str) -> None:
 
 async def send_tab(session_name: str) -> None:
     await asyncio.to_thread(
-        subprocess.run,
+        run_tmux,
         ["tmux", "send-keys", "-t", f"={session_name}:", "Tab"],
         check=True,
         timeout=_TMUX_CMD_TIMEOUT_SEC,
@@ -181,7 +182,7 @@ async def send_tab(session_name: str) -> None:
 
 async def send_ctrl_u(session_name: str) -> None:
     await asyncio.to_thread(
-        subprocess.run,
+        run_tmux,
         ["tmux", "send-keys", "-t", f"={session_name}:", "C-u"],
         check=True,
         timeout=_TMUX_CMD_TIMEOUT_SEC,

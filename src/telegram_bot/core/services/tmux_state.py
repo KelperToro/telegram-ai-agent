@@ -14,11 +14,9 @@ and one of the renames could fail or leave a partial file behind
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import logging
 import os
-import subprocess
 import threading
 import time
 from collections.abc import Iterator
@@ -28,7 +26,9 @@ from pathlib import Path
 from typing import Any
 
 from telegram_bot.core.services.claude import Mode
+from telegram_bot.core.services.windows_pty import run_tmux
 from telegram_bot.core.types import ChannelKey
+from telegram_bot.core.utils.file_lock import FileLock
 
 logger = logging.getLogger(__name__)
 
@@ -208,15 +208,8 @@ class StateStore:
     @contextmanager
     def _file_lock(self) -> Iterator[None]:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = self._state_path.with_suffix(self._state_path.suffix + ".lock")
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+        with FileLock(self._state_path):
             yield
-        finally:
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
 
     def _atomic_write_json(self, data: dict[str, Any]) -> None:
         tmp_path = self._state_path.with_name(
@@ -447,7 +440,7 @@ def scan_orphan_tmux_sessions(state_path: Path) -> list[str]:
             state_markers[name] = entry.get("runner_version", "stream-json-legacy")
 
     try:
-        tmux_result = subprocess.run(
+        tmux_result = run_tmux(
             ["tmux", "ls", "-F", "#{session_name}"],
             capture_output=True,
             text=True,

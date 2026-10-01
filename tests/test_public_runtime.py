@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -52,7 +53,8 @@ def test_public_entrypoint_selects_dedicated_tmux_server(tmp_path: Path, monkeyp
     runtime_dir = entrypoint._ensure_dedicated_tmux_tmpdir(tmp_path, tmp_path / "tmux_sessions")
 
     assert runtime_dir == tmp_path / ".telegram-bot-tmux"
-    assert runtime_dir.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert runtime_dir.stat().st_mode & 0o777 == 0o700
     assert entrypoint.os.environ["TMUX_TMPDIR"] == str(runtime_dir)
 
 

@@ -44,6 +44,12 @@ from telegram_bot.core.services.cc_modes import (
     Mode,
     _get_mode_prompt,
 )
+from telegram_bot.core.services.codex_app_server import (
+    CodexAppServerClient,
+    CodexAppServerError,
+    codex_app_config,
+    latest_final_answer,
+)
 from telegram_bot.core.services.codex_mcp import (
     build_codex_mcp_config_args,
     discover_codex_mcp_server_names,
@@ -57,6 +63,7 @@ from telegram_bot.core.services.providers import (
     claude_binary,
     codex_process_env,
 )
+from telegram_bot.core.services.topic_config import config_id_for_channel
 from telegram_bot.core.services.topic_runtime import BotDefaults, resolve_topic_runtime_config
 from telegram_bot.core.types import ChannelKey
 
@@ -78,6 +85,7 @@ __all__ = [
     "CCInactivityError",
     "CCNotFoundError",
     "CCProcessError",
+    "CCSessionBusyError",
     "CCTimeoutError",
     "Mode",
     "ReplySessionRef",
@@ -252,7 +260,7 @@ class SessionManager:
         configured = Path(self._settings.default_cwd)
         if configured.is_absolute():
             return configured
-        return self._settings.workspace_root_path / configured
+        return (self._settings.workspace_root_path / configured).resolve()
 
     @staticmethod
     def _ch_key(channel_key: ChannelKey) -> str:
@@ -282,8 +290,8 @@ class SessionManager:
         session.cwd / mode / mcp_config is owned by whoever instantiated the
         session and should not be overwritten.
         """
-        thread_id = channel_key[1]
-        if self._topic_config is None or thread_id is None:
+        config_id = config_id_for_channel(channel_key)
+        if self._topic_config is None or config_id is None:
             return
         # A locked session means a stream is in flight — mutating engine/model/
         # cwd mid-stream corrupts retry and session-save logic. The next prompt
@@ -291,7 +299,7 @@ class SessionManager:
         if session.lock.locked():
             return
 
-        topic = self._topic_config.get_topic(thread_id)
+        topic = self._topic_config.get_topic(config_id)
         runtime = resolve_topic_runtime_config(
             topic,
             BotDefaults(
@@ -361,12 +369,38 @@ class SessionManager:
         """Kill a CC subprocess and its process group immediately via SIGKILL."""
         if process.returncode is not None:
             return
+        if os.name == "nt":
+            # codex.cmd starts a child codex.exe. Killing only the cmd wrapper
+            # leaves the agent and its MCP servers running after /cancel.
+            killed_tree = False
+            if process.pid is not None:
+                try:
+                    killer = await asyncio.create_subprocess_exec(
+                        "taskkill",
+                        "/PID",
+                        str(process.pid),
+                        "/T",
+                        "/F",
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    killed_tree = await killer.wait() == 0
+                except OSError:
+                    logger.warning(
+                        "Could not start taskkill for pid=%s", process.pid, exc_info=True
+                    )
+            if not killed_tree and process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+            with contextlib.suppress(TimeoutError, ProcessLookupError):
+                await asyncio.wait_for(process.wait(), timeout=5)
+            return
         pid = process.pid
         if pid is None:
             return
         try:
-            pgid = os.getpgid(pid)
-            os.killpg(pgid, signal.SIGKILL)
+            pgid = getattr(os, "getpgid")(pid)  # noqa: B009
+            getattr(os, "killpg")(pgid, getattr(signal, "SIGKILL"))  # noqa: B009
             logger.info("Sent SIGKILL to process group %d", pgid)
             try:
                 await asyncio.wait_for(process.wait(), timeout=5)
@@ -645,6 +679,70 @@ class SessionManager:
             )
         return "\n<telegram-context>\n" + "\n".join(lines) + "\n</telegram-context>\n\n"
 
+    async def _run_codex_app_first_turn(
+        self, prompt: str, session: SessionData, *, mcp_config: str
+    ) -> str:
+        """Persist a new Windows Codex chat as a Desktop-visible thread."""
+        cwd = session.cwd or str(self._default_cwd())
+        config = codex_app_config(cwd, mcp_config)
+        full_prompt = self._build_full_prompt(
+            prompt,
+            None,
+            session.mode,
+            session.chat_id,
+            session.thread_id,
+        )
+        async with CodexAppServerClient(cwd=cwd) as client:
+            async with session.process_lock:
+                session.process = client.process
+            try:
+                params: dict[str, object] = {
+                    "cwd": cwd,
+                    "approvalPolicy": "never",
+                    "sandbox": "danger-full-access",
+                    "threadSource": "telegram_ai_agent",
+                    "config": config,
+                }
+                if session.model:
+                    params["model"] = session.model
+                created = await client.call("thread/start", params)
+                thread = created.get("thread")
+                thread_id = thread.get("id") if isinstance(thread, dict) else None
+                if not isinstance(thread_id, str) or not thread_id:
+                    raise CodexAppServerError("Codex did not create a thread")
+                preview = " ".join(prompt.split())[:70].strip()
+                await client.call(
+                    "thread/name/set",
+                    {"threadId": thread_id, "name": f"Telegram: {preview or 'Codex'}"},
+                )
+                started = await client.call(
+                    "turn/start",
+                    {
+                        "threadId": thread_id,
+                        "cwd": cwd,
+                        "approvalPolicy": "never",
+                        "sandboxPolicy": {"type": "dangerFullAccess"},
+                        "input": [{"type": "text", "text": full_prompt}],
+                    },
+                )
+                if not isinstance(started.get("turn"), dict):
+                    raise CodexAppServerError("Codex did not start a turn")
+                await client.wait_for_turn(
+                    thread_id, timeout=float(self._settings.cc_query_timeout_sec)
+                )
+                read = await client.call(
+                    "thread/read", {"threadId": thread_id, "includeTurns": True}
+                )
+                persisted = read.get("thread")
+                if not isinstance(persisted, dict):
+                    raise CodexAppServerError("Codex did not persist the new thread")
+                answer = latest_final_answer(persisted)
+                session.session_id = thread_id
+                return answer
+            finally:
+                async with session.process_lock:
+                    session.process = None
+
     async def _run_cc_stream(
         self,
         prompt: str,
@@ -661,6 +759,7 @@ class SessionManager:
 
         original_mcp_config = session.mcp_config
         runtime_mcp_path: Path | None = None
+        use_app_server = os.name == "nt" and session.engine == "codex" and session_id is None
         try:
             runtime_mcp_path = (
                 Path(self.file_cache_dir)
@@ -673,7 +772,11 @@ class SessionManager:
                 runtime_path=runtime_mcp_path,
                 project_root=self._settings.app_root_path,
             )
-            exec_cmd = self._build_exec_command(prompt, session)
+            if use_app_server:
+                app_mcp_config = session.mcp_config
+                exec_cmd = None
+            else:
+                exec_cmd = self._build_exec_command(prompt, session)
         except Exception:
             session.mcp_config = original_mcp_config
             if runtime_mcp_path is not None:
@@ -682,6 +785,25 @@ class SessionManager:
             raise
         finally:
             session.mcp_config = original_mcp_config
+        if use_app_server:
+            try:
+                result = await self._run_codex_app_first_turn(
+                    prompt, session, mcp_config=app_mcp_config
+                )
+                session.last_activity = time.monotonic()
+                return result
+            finally:
+                if runtime_mcp_path is not None:
+                    processes = await asyncio.to_thread(
+                        tagged_processes,
+                        channel_key=(session.chat_id, session.thread_id),
+                        runtime_path=str(runtime_mcp_path),
+                    )
+                    if processes:
+                        await asyncio.to_thread(terminate_processes, processes)
+                    with contextlib.suppress(OSError):
+                        runtime_mcp_path.unlink()
+        assert exec_cmd is not None
         cmd = exec_cmd.argv
         cwd = exec_cmd.cwd
 
@@ -860,6 +982,8 @@ class SessionManager:
         cleanup_runtime_mcp_config()
 
         if process.returncode and process.returncode != 0 and not result_text:
+            if session.engine == "codex" and "already has an active writer" in stderr_text:
+                raise CCSessionBusyError(session.session_id or "")
             logger.warning(
                 "CC stream exited with code %d, stderr: %s",
                 process.returncode,
@@ -1080,10 +1204,10 @@ class SessionManager:
         session = self._get_session(channel_key)
 
         async with session.lock:
-            thread_id = channel_key[1]
+            config_id = config_id_for_channel(channel_key)
             requested_engine = session.engine
-            if self._topic_config is not None and thread_id is not None:
-                requested_engine = self._topic_config.get_topic(thread_id).engine
+            if self._topic_config is not None and config_id is not None:
+                requested_engine = self._topic_config.get_topic(config_id).engine
             available_engine = choose_available_engine(requested_engine)
             if available_engine is None:
                 logger.warning(
@@ -1100,15 +1224,15 @@ class SessionManager:
                 )
                 session.engine = available_engine
                 session.model = None
-                if self._topic_config is not None and thread_id is not None:
+                if self._topic_config is not None and config_id is not None:
                     update_engine_model = getattr(self._topic_config, "update_engine_model", None)
                     if update_engine_model is not None:
-                        ok = await update_engine_model(thread_id, available_engine, None)
+                        ok = await update_engine_model(config_id, available_engine, None)
                         if not ok:
                             logger.warning(
-                                "Failed to persist fallback engine=%s for thread_id=%s",
+                                "Failed to persist fallback engine=%s for config_id=%s",
                                 available_engine,
-                                thread_id,
+                                config_id,
                             )
                 # Mirror manual /engine cleanup: drop the prior provider's
                 # session_id so the new engine doesn't try to resume a foreign
@@ -1150,6 +1274,15 @@ class SessionManager:
                         channel_key,
                     )
                     return t("ui.cc_not_found")
+                except CCSessionBusyError:
+                    logger.info(
+                        "Codex thread has another active writer; preserving session_id=%s",
+                        session.session_id,
+                    )
+                    return t("ui.codex_thread_busy")
+                except (CodexAppServerError, TimeoutError):
+                    logger.warning("Could not create Codex Desktop thread", exc_info=True)
+                    return t("ui.error_generic")
                 except (CCTimeoutError, CCProcessError, CCInactivityError) as exc:
                     last_error = exc
                     if attempt == 0:
@@ -1293,11 +1426,15 @@ class SessionManager:
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.info("Session cleanup task started")
 
-    async def override_session(self, channel_key: ChannelKey, session_id: str) -> None:
+    async def override_session(
+        self, channel_key: ChannelKey, session_id: str, *, provider: str | None = None
+    ) -> None:
         """Override session_id for a channel (used by reply-to-resume)."""
         session = self._get_session(channel_key)
         async with session.lock:
             session.session_id = session_id
+            if provider is not None:
+                session.engine = provider
         logger.info("Override session for channel %s: session_id=%s", channel_key, session_id)
 
     def get_current_session_id(self, channel_key: ChannelKey) -> str | None:
@@ -1393,7 +1530,7 @@ class SessionManager:
             and self._topic_config is not None
         ):
             try:
-                topic_settings = self._topic_config.get_topic(channel_key[1])
+                topic_settings = self._topic_config.get_topic(config_id_for_channel(channel_key))
                 resolved_exec_mode = topic_settings.exec_mode
             except Exception:
                 logger.debug("record_message: failed to resolve exec_mode", exc_info=True)
@@ -1698,6 +1835,10 @@ class CCProcessError(Exception):
     def __init__(self, exit_code: int) -> None:
         self.exit_code = exit_code
         super().__init__(f"CC process exited with code {exit_code}")
+
+
+class CCSessionBusyError(Exception):
+    """Another Codex process currently owns the selected thread."""
 
 
 class CCInactivityError(Exception):
