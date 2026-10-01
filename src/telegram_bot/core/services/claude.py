@@ -723,10 +723,15 @@ class SessionManager:
                 )
                 self._save_channel_sessions()
                 preview = " ".join(prompt.split())[:70].strip()
-                await client.call(
-                    "thread/name/set",
-                    {"threadId": thread_id, "name": f"Telegram: {preview or 'Codex'}"},
-                )
+                try:
+                    await client.call(
+                        "thread/name/set",
+                        {"threadId": thread_id, "name": f"Telegram: {preview or 'Codex'}"},
+                    )
+                except CodexAppServerError:
+                    # Older Codex builds may not support naming. The thread is
+                    # already persisted, and its first prompt is still searchable.
+                    logger.warning("Could not name Codex Desktop thread", exc_info=True)
                 started = await client.call(
                     "turn/start",
                     {

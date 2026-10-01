@@ -8,14 +8,17 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from telegram_bot.core.config import Settings
 from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
-from telegram_bot.core.services.claude import SessionManager
+from telegram_bot.core.services.claude import SessionData, SessionManager
 from telegram_bot.core.services.codex_app_server import (
+    CodexAppServerError,
     _thread_list_label,
     stream_event_from_notification,
 )
@@ -107,6 +110,74 @@ def test_desktop_first_turn_progress_preserves_status_and_commentary() -> None:
     )
     assert final is None
     assert completed is not None and (completed.type, completed.turn_id) == ("turn_end", "turn-1")
+
+
+@pytest.mark.asyncio
+async def test_desktop_first_turn_survives_unsupported_thread_naming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import telegram_bot.core.services.claude as claude
+
+    calls: list[str] = []
+
+    class FakeClient:
+        process = None
+
+        def __init__(self, *, cwd: str) -> None:
+            assert cwd == str(tmp_path)
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def call(self, method: str, _params: dict[str, object]) -> dict[str, object]:
+            calls.append(method)
+            if method == "thread/start":
+                return {"thread": {"id": "018f0000-0000-7000-8000-000000000001"}}
+            if method == "thread/name/set":
+                raise CodexAppServerError("unsupported method")
+            if method == "turn/start":
+                return {"turn": {"id": "turn-1"}}
+            raise AssertionError(method)
+
+        async def wait_for_turn(
+            self,
+            _thread_id: str,
+            *,
+            timeout: float,
+            on_notification: Callable[[dict[str, Any]], Awaitable[None] | None],
+        ) -> None:
+            assert timeout > 0
+            result = on_notification(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "Done",
+                        }
+                    },
+                }
+            )
+            if result is not None:
+                await result
+
+    monkeypatch.setattr(claude, "CodexAppServerClient", FakeClient)
+    monkeypatch.setattr(claude, "codex_app_config", lambda *_args: {})
+    manager = SessionManager(
+        Settings(telegram_bot_token="123:test", project_root=str(tmp_path), _env_file=None)
+    )
+    session = SessionData(engine="codex", cwd=str(tmp_path), chat_id=123, thread_id=None)
+    answer = await manager._run_codex_app_first_turn(
+        "Hello", session, lambda _event: None, mcp_config=""
+    )
+
+    assert answer == "Done"
+    assert session.session_id == "018f0000-0000-7000-8000-000000000001"
+    assert calls == ["thread/start", "thread/name/set", "turn/start"]
 
 
 def test_resume_uses_desktop_preview_when_thread_has_no_name() -> None:
