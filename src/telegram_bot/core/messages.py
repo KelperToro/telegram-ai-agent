@@ -34,7 +34,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.recognizing_voice": "⏳ Transcribing voice...",
         "ui.processing_forwards": "⏳ Processing forwarded messages...",
         "ui.processing_files": "⏳ Processing files...",
-        "ui.new_session": "New session",
+        "ui.new_session": "The next message will create a new chat.",
         "ui.context_cleared": "🧹 Context cleared, tmux session alive",
         "ui.reset_failed": "❌ Couldn't reset the context. Try again in a moment.",
         "ui.topic_welcome": (
@@ -346,7 +346,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.recognizing_voice": "⏳ Распознаю голосовое...",
         "ui.processing_forwards": "⏳ Обрабатываю пересланные сообщения...",
         "ui.processing_files": "⏳ Обрабатываю файлы...",
-        "ui.new_session": "Новая сессия",
+        "ui.new_session": "Следующее сообщение создаст новый чат.",
         "ui.context_cleared": "🧹 Контекст очищен, tmux-сессия жива",
         "ui.reset_failed": "❌ Не удалось обновить контекст. Попробуй ещё раз через пару секунд.",
         "ui.topic_welcome": (
