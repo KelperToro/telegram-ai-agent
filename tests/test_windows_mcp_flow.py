@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -21,6 +22,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from telegram_bot.core.handlers.photo import _download_and_format_media, _format_media_prompt
 from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
+from telegram_bot.core.services.forward_batcher import _transcribe_voice, _try_transcribe_voice
 
 
 def _load_bot_server() -> Any:
@@ -224,3 +226,33 @@ async def test_telegram_media_downloads_become_codex_file_prompts(tmp_path: Path
     assert "Прочитай файл" in prompt
     assert "Что на фото?" in prompt
     assert all(item is not None and item["path"] in prompt for item in items)
+
+
+@pytest.mark.asyncio
+async def test_voice_bytes_become_codex_prompt_without_platform_conversion() -> None:
+    class FakeBot:
+        async def get_file(self, file_id: str) -> SimpleNamespace:
+            assert file_id == "voice-id"
+            return SimpleNamespace(file_path="voice.ogg")
+
+        async def download_file(self, file_path: str) -> io.BytesIO:
+            assert file_path == "voice.ogg"
+            return io.BytesIO(b"ogg-audio-data")
+
+    class FakeTranscriber:
+        async def transcribe(self, data: bytes) -> str:
+            assert data == b"ogg-audio-data"
+            return "Продолжай старый чат"
+
+    voice = SimpleNamespace(
+        voice=SimpleNamespace(file_id="voice-id", file_size=len(b"ogg-audio-data")),
+        message_id=12,
+    )
+    bot = FakeBot()
+    transcriber = FakeTranscriber()
+    assert await _try_transcribe_voice(voice, bot, transcriber) == (
+        True,
+        "Продолжай старый чат",
+    )
+    prompt = await _transcribe_voice(voice, bot, transcriber)
+    assert "Продолжай старый чат" in prompt

@@ -15,6 +15,10 @@ import pytest
 from telegram_bot.core.config import Settings
 from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
 from telegram_bot.core.services.claude import SessionManager
+from telegram_bot.core.services.codex_app_server import (
+    _thread_list_label,
+    stream_event_from_notification,
+)
 from telegram_bot.core.services.codex_mcp import build_codex_mcp_config_args
 from telegram_bot.core.services.process_cleanup import (
     processes_by_sid,
@@ -58,6 +62,61 @@ def test_resume_lists_desktop_session_for_matching_cwd(
     assert [(item.provider, item.session_id, item.preview) for item in entries] == [
         ("codex", session_id, "Hello")
     ]
+
+
+def test_desktop_first_turn_progress_preserves_status_and_commentary() -> None:
+    started = stream_event_from_notification(
+        {"method": "turn/started", "params": {"turn": {"id": "turn-1"}}}
+    )
+    command = stream_event_from_notification(
+        {
+            "method": "item/started",
+            "params": {
+                "turnId": "turn-1",
+                "item": {"type": "commandExecution", "command": "git status"},
+            },
+        }
+    )
+    commentary = stream_event_from_notification(
+        {
+            "method": "item/completed",
+            "params": {
+                "turnId": "turn-1",
+                "item": {"type": "agentMessage", "phase": "commentary", "text": "Checking files"},
+            },
+        }
+    )
+    final = stream_event_from_notification(
+        {
+            "method": "item/completed",
+            "params": {
+                "turnId": "turn-1",
+                "item": {"type": "agentMessage", "phase": "final_answer", "text": "Done"},
+            },
+        }
+    )
+    completed = stream_event_from_notification(
+        {"method": "turn/completed", "params": {"turn": {"id": "turn-1"}}}
+    )
+
+    assert started is not None and (started.type, started.turn_id) == ("turn_start", "turn-1")
+    assert command is not None and command.type == "status" and "Git" in command.content
+    assert commentary is not None and (commentary.type, commentary.content) == (
+        "text",
+        "Checking files",
+    )
+    assert final is None
+    assert completed is not None and (completed.type, completed.turn_id) == ("turn_end", "turn-1")
+
+
+def test_resume_uses_desktop_preview_when_thread_has_no_name() -> None:
+    assert _thread_list_label({"name": "  Named   discussion ", "preview": "ignored"}) == (
+        "Named discussion"
+    )
+    assert _thread_list_label({"preview": "  Fix   image upload on Windows  "}) == (
+        "Fix image upload on Windows"
+    )
+    assert _thread_list_label({"preview": "<command-message>internal"}) is None
 
 
 def test_file_lock_rejects_second_nonblocking_holder(tmp_path: Path) -> None:

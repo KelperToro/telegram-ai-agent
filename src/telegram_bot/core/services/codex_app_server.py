@@ -7,9 +7,11 @@ import contextlib
 import json
 import logging
 import tomllib
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from telegram_bot.core.services.cc_events import StreamEvent, _tool_status
 from telegram_bot.core.services.codex_mcp import (
     build_codex_mcp_config_args,
     discover_codex_mcp_server_names,
@@ -131,7 +133,13 @@ class CodexAppServerClient:
                 raise CodexAppServerError(f"Codex app-server returned no result for {method}")
             return result
 
-    async def wait_for_turn(self, thread_id: str, *, timeout: float) -> None:
+    async def wait_for_turn(
+        self,
+        thread_id: str,
+        *,
+        timeout: float,
+        on_notification: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+    ) -> None:
         """Wait for the completion notification of the first persisted turn."""
         proc = self._proc
         if proc is None or proc.stdout is None:
@@ -148,10 +156,16 @@ class CodexAppServerClient:
                         event = json.loads(line)
                     except json.JSONDecodeError as exc:
                         raise CodexAppServerError("Codex app-server returned invalid JSON") from exc
-                if not isinstance(event, dict) or event.get("method") != "turn/completed":
+                if not isinstance(event, dict):
                     continue
                 params = event.get("params")
                 if not isinstance(params, dict) or params.get("threadId") != thread_id:
+                    continue
+                if on_notification is not None:
+                    forwarded = on_notification(event)
+                    if asyncio.iscoroutine(forwarded):
+                        await forwarded
+                if event.get("method") != "turn/completed":
                     continue
                 turn = params.get("turn")
                 if isinstance(turn, dict):
@@ -159,6 +173,55 @@ class CodexAppServerClient:
                     if status not in (None, "completed"):
                         raise CodexAppServerError(f"Codex turn ended with status {status}")
                 return
+
+
+def stream_event_from_notification(event: dict[str, Any]) -> StreamEvent | None:
+    """Normalize first-turn app-server progress for the existing Telegram stream UI."""
+    method = event.get("method")
+    params = event.get("params")
+    if not isinstance(params, dict):
+        return None
+    if method in {"turn/started", "turn/completed"}:
+        turn = params.get("turn")
+        turn_id = turn.get("id") if isinstance(turn, dict) else None
+        if not isinstance(turn_id, str):
+            turn_id = None
+        return StreamEvent(
+            "turn_start" if method == "turn/started" else "turn_end", "", turn_id=turn_id
+        )
+    if method not in {"item/started", "item/completed"}:
+        return None
+    item = params.get("item")
+    if not isinstance(item, dict):
+        return None
+    turn_id = params.get("turnId")
+    if not isinstance(turn_id, str):
+        turn_id = None
+    item_type = item.get("type")
+    if method == "item/completed":
+        text = item.get("text")
+        if (
+            item_type == "agentMessage"
+            and item.get("phase") == "commentary"
+            and isinstance(text, str)
+            and text.strip()
+        ):
+            return StreamEvent("text", text, turn_id=turn_id)
+        return None
+    if item_type == "commandExecution":
+        command = item.get("command")
+        return StreamEvent(
+            "status",
+            _tool_status("Bash", {"command": command} if isinstance(command, str) else None),
+            turn_id=turn_id,
+        )
+    if item_type == "mcpToolCall":
+        server, tool = item.get("server"), item.get("tool")
+        if isinstance(server, str) and isinstance(tool, str):
+            return StreamEvent("status", _tool_status(f"mcp__{server}__{tool}"), turn_id=turn_id)
+    if item_type == "fileChange":
+        return StreamEvent("status", _tool_status("Edit"), turn_id=turn_id)
+    return None
 
 
 def codex_app_config(cwd: str | Path, mcp_config: str | None) -> dict[str, Any]:
@@ -204,6 +267,20 @@ def latest_final_answer(thread: dict[str, Any]) -> str:
     raise CodexAppServerError("Codex turn contains no final answer")
 
 
+def _thread_list_label(item: dict[str, Any]) -> str | None:
+    title = item.get("name")
+    if not isinstance(title, str) or not title.strip():
+        title = item.get("preview")
+        if not isinstance(title, str):
+            return None
+        if "</telegram-context>" in title:
+            title = title.split("</telegram-context>", 1)[1]
+    normalized = " ".join(title.split())
+    if not normalized or normalized.startswith(("<command-", "<system-reminder>")):
+        return None
+    return normalized[:120]
+
+
 async def list_codex_thread_titles(*, max_threads: int = 500) -> dict[str, str]:
     """Read Desktop chat names without hydrating large conversation histories."""
     names: dict[str, str] = {}
@@ -226,9 +303,9 @@ async def list_codex_thread_titles(*, max_threads: int = 500) -> dict[str, str]:
                 if not isinstance(item, dict):
                     continue
                 thread_id = item.get("id")
-                title = item.get("name")
-                if isinstance(thread_id, str) and isinstance(title, str) and title.strip():
-                    names[thread_id] = " ".join(title.split())[:120]
+                title = _thread_list_label(item)
+                if isinstance(thread_id, str) and title:
+                    names[thread_id] = title
             next_cursor = result.get("nextCursor")
             if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
                 break

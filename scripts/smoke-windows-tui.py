@@ -58,6 +58,7 @@ async def main() -> int:
         configure_broker(tmux_dir)
         broker_file = Path(os.environ["TELEGRAM_BOT_PTY_BROKER_FILE"])
         manager = TmuxManager(tmux_dir)
+        active_manager = manager
         key = (123, None)
         events: list[tuple[str, str]] = []
         answer_seen = asyncio.Event()
@@ -111,12 +112,41 @@ async def main() -> int:
                     print(f"TUI pane: {pane.stdout!r}")
                 print("No Codex answer reached the TUI transcript tail", file=sys.stderr)
                 return 1
+            if "--restore" in sys.argv[1:]:
+                assert stream_task is not None
+                # Transcript tails intentionally stay alive after a completed
+                # turn. Stop only this bot-side tail; leave Codex and ConPTY up.
+                tail = manager._cancel_events.get(key)
+                if tail is not None:
+                    tail.set()
+                await asyncio.wait_for(stream_task, timeout=10)
+                stream_task = None
+                restored = TmuxManager(tmux_dir)
+                if key not in restored.restore_all(sessions) or not restored.is_active(key):
+                    print("Codex TUI did not reattach after manager restart", file=sys.stderr)
+                    return 1
+                active_manager = restored
+                second_seen = asyncio.Event()
+
+                def on_second(event: StreamEvent) -> None:
+                    if event.type == "result_message" and "WINDOWSTUIRESTORED" in event.content:
+                        second_seen.set()
+
+                stream_task = asyncio.create_task(
+                    restored.send_stream(key, "Reply with exactly WINDOWSTUIRESTORED", on_second)
+                )
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(second_seen.wait(), timeout=120)
+                if not second_seen.is_set():
+                    print("Restored Codex TUI did not answer", file=sys.stderr)
+                    return 1
+                print("Reattached Codex TUI answered: WINDOWSTUIRESTORED")
             return 0
         finally:
             if stream_task is not None:
-                await manager.cancel(key)
+                await active_manager.cancel(key)
                 await asyncio.wait_for(stream_task, timeout=10)
-            await manager.kill(key)
+            await active_manager.kill(key)
             if broker_file.exists():
                 info = json.loads(broker_file.read_text(encoding="utf-8"))
                 os.kill(info["pid"], signal.SIGTERM)

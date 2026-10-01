@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from telegram_bot.core.config import Settings
+from telegram_bot.core.services.cc_events import StreamEvent
 from telegram_bot.core.services.claude import SessionData, SessionManager
 
 
@@ -34,8 +35,13 @@ async def main() -> None:
                 _env_file=None,
             )
             chat_id = 0
-            prompt = "Reply exactly BOOTSTRAPOK"
-            expected = "BOOTSTRAPOK"
+            tool_events = "--tool-events" in sys.argv[1:]
+            prompt = (
+                "Read README.windows.md, then reply exactly BOOTSTRAPTOOLOK"
+                if tool_events
+                else "Reply exactly BOOTSTRAPOK"
+            )
+            expected = "BOOTSTRAPTOOLOK" if tool_events else "BOOTSTRAPOK"
         manager = SessionManager(settings)
         session = SessionData(
             engine="codex",
@@ -44,11 +50,17 @@ async def main() -> None:
             thread_id=None,
             mcp_config=manager.default_mcp_config_path(),
         )
-        answer = await manager._run_cc_stream(prompt, session, lambda _event: None)
+        events: list[StreamEvent] = []
+        answer = await manager._run_cc_stream(prompt, session, events.append)
         print("thread_id:", session.session_id)
         print("answer:", answer.strip())
+        print("progress:", [event.type for event in events])
         if answer.strip() != expected or session.session_id is None:
             raise SystemExit(1)
+        if not {"turn_start", "turn_end"} <= {event.type for event in events}:
+            raise SystemExit("Missing first-turn progress lifecycle")
+        if not telegram_mcp and tool_events and not any(event.type == "status" for event in events):
+            raise SystemExit("Missing first-turn tool progress")
 
 
 if __name__ == "__main__":

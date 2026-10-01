@@ -70,6 +70,13 @@ async def main() -> int:
         print(f"Second response: {second!r}; session: {session.session_id}")
         if "amber" not in second.lower() or session.session_id != first_id:
             return 1
+        restored = SessionManager(settings)
+        restored.load_mapping()
+        await restored.override_session(key, first_id, provider="codex")
+        third = await restored.send_stream(key, "Reply with the secret word only.", on_event)
+        print(f"Restored response: {third!r}; session: {restored.get_current_session_id(key)}")
+        if "amber" not in third.lower() or restored.get_current_session_id(key) != first_id:
+            return 1
     return 0
 
 

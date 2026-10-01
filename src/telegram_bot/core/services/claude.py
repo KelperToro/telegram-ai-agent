@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from telegram_bot.core.config import Settings
 from telegram_bot.core.messages import t
@@ -49,6 +49,7 @@ from telegram_bot.core.services.codex_app_server import (
     CodexAppServerError,
     codex_app_config,
     latest_final_answer,
+    stream_event_from_notification,
 )
 from telegram_bot.core.services.codex_mcp import (
     build_codex_mcp_config_args,
@@ -680,7 +681,12 @@ class SessionManager:
         return "\n<telegram-context>\n" + "\n".join(lines) + "\n</telegram-context>\n\n"
 
     async def _run_codex_app_first_turn(
-        self, prompt: str, session: SessionData, *, mcp_config: str
+        self,
+        prompt: str,
+        session: SessionData,
+        on_event: Callable[[StreamEvent], Awaitable[bool | None] | bool | None],
+        *,
+        mcp_config: str,
     ) -> str:
         """Persist a new Windows Codex chat as a Desktop-visible thread."""
         cwd = session.cwd or str(self._default_cwd())
@@ -710,6 +716,12 @@ class SessionManager:
                 thread_id = thread.get("id") if isinstance(thread, dict) else None
                 if not isinstance(thread_id, str) or not thread_id:
                     raise CodexAppServerError("Codex did not create a thread")
+                session.session_id = thread_id
+                channel_key = (session.chat_id, session.thread_id)
+                self._channel_sessions[self._ch_key(channel_key)] = self._session_ref(
+                    session.engine, thread_id, session.model
+                )
+                self._save_channel_sessions()
                 preview = " ".join(prompt.split())[:70].strip()
                 await client.call(
                     "thread/name/set",
@@ -727,18 +739,46 @@ class SessionManager:
                 )
                 if not isinstance(started.get("turn"), dict):
                     raise CodexAppServerError("Codex did not start a turn")
+
+                final_answer: str | None = None
+
+                async def forward_notification(notification: dict[str, Any]) -> None:
+                    nonlocal final_answer
+                    if notification.get("method") == "item/completed":
+                        params = notification.get("params")
+                        item = params.get("item") if isinstance(params, dict) else None
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") == "agentMessage"
+                            and item.get("phase") == "final_answer"
+                            and isinstance(item.get("text"), str)
+                        ):
+                            final_answer = item["text"]
+                    progress = stream_event_from_notification(notification)
+                    if progress is None:
+                        return
+                    try:
+                        delivered = on_event(progress)
+                        if asyncio.iscoroutine(delivered):
+                            await delivered
+                    except Exception:
+                        logger.warning("Could not forward Codex progress", exc_info=True)
+
                 await client.wait_for_turn(
-                    thread_id, timeout=float(self._settings.cc_query_timeout_sec)
+                    thread_id,
+                    timeout=float(self._settings.cc_query_timeout_sec),
+                    on_notification=forward_notification,
                 )
+                if final_answer and final_answer.strip():
+                    return final_answer
+                # Some older app-server builds omit final item notifications.
                 read = await client.call(
                     "thread/read", {"threadId": thread_id, "includeTurns": True}
                 )
                 persisted = read.get("thread")
                 if not isinstance(persisted, dict):
                     raise CodexAppServerError("Codex did not persist the new thread")
-                answer = latest_final_answer(persisted)
-                session.session_id = thread_id
-                return answer
+                return latest_final_answer(persisted)
             finally:
                 async with session.process_lock:
                     session.process = None
@@ -788,7 +828,7 @@ class SessionManager:
         if use_app_server:
             try:
                 result = await self._run_codex_app_first_turn(
-                    prompt, session, mcp_config=app_mcp_config
+                    prompt, session, on_event, mcp_config=app_mcp_config
                 )
                 session.last_activity = time.monotonic()
                 return result

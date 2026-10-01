@@ -68,6 +68,12 @@ async def main() -> None:
         threads = listed.get("result", {}).get("data", [])
         print("thread_count:", len(threads))
         print("sources:", dict(Counter(str(item.get("source")) for item in threads)))
+        if threads:
+            print("thread_fields:", list(threads[0]))
+            print(
+                "unnamed_with_preview:",
+                sum(bool(item.get("preview")) for item in threads if not item.get("name")),
+            )
         print("more_pages:", listed.get("result", {}).get("nextCursor") is not None)
         if threads:
             goal = await call(3, "thread/goal/get", {"threadId": threads[0]["id"]})
@@ -95,19 +101,45 @@ async def main() -> None:
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    "input": [{"type": "text", "text": "Reply exactly SOURCEAPP"}],
+                    "input": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Read README.windows.md, then reply exactly TOOLSTREAMOK"
+                                if "--tool-events" in sys.argv[1:]
+                                else "Reply exactly SOURCEAPP"
+                            ),
+                        }
+                    ],
                 },
             )
             if "error" in started:
                 raise RuntimeError(str(started["error"]))
+            event_counts: Counter[str] = Counter()
+            event_fields: dict[str, list[str]] = {}
+            item_fields: dict[str, list[str]] = {}
             while True:
                 raw = await asyncio.wait_for(proc.stdout.readline(), timeout=120)
                 if not raw:
                     raise RuntimeError("app-server closed before turn completion")
                 event = json.loads(raw)
+                method = event.get("method")
+                if isinstance(method, str):
+                    params = event.get("params", {})
+                    item = params.get("item") if isinstance(params, dict) else None
+                    item_type = item.get("type") if isinstance(item, dict) else None
+                    event_counts[f"{method}:{item_type or ''}"] += 1
+                    event_fields.setdefault(
+                        method, list(params) if isinstance(params, dict) else []
+                    )
+                    if isinstance(item_type, str) and isinstance(item, dict):
+                        item_fields.setdefault(item_type, list(item))
                 if event.get("method") == "turn/completed":
                     print("turn_completed:", event.get("params", {}).get("threadId") == thread_id)
                     break
+            print("event_counts:", dict(event_counts))
+            print("event_fields:", event_fields)
+            print("item_fields:", item_fields)
         elif len(sys.argv) > 2 and sys.argv[1] == "--resume":
             resumed = await call(5, "thread/resume", {"threadId": sys.argv[2]})
             print("resume_ok:", "result" in resumed)
