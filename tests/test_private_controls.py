@@ -146,7 +146,9 @@ async def test_private_resume_selects_codex_chat_from_another_project(
     sid = "018f0000-0000-7000-8000-000000000001"
     transcript = tmp_path / "rollout.jsonl"
     transcript.write_text("", encoding="utf-8")
-    entry = SessionEntry("codex", sid, transcript, "old work", time.time(), 0, old_project)
+    entry = SessionEntry(
+        "codex", sid, transcript, "old work", time.time(), 0, old_project, "Old discussion"
+    )
     config = TopicConfig(str(tmp_path / "topics.json"), str(current))
     settings = Settings(telegram_bot_token="123:test", project_root=str(current), _env_file=None)
     sessions = SessionManager(settings, topic_config=config)
@@ -168,6 +170,8 @@ async def test_private_resume_selects_codex_chat_from_another_project(
     assert selected.cwd == str(old_project)
     assert sessions.get_current_session_id((456, None)) == sid
     assert callback.message.edited
+    assert "Old discussion" in callback.message.edited[0]
+    assert str(old_project) in callback.message.edited[0]
 
 
 def test_private_resume_lists_all_codex_projects_and_deduplicates(tmp_path: Path) -> None:

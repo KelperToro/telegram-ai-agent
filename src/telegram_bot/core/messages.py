@@ -195,6 +195,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.resume_starting": "Resuming...",
         "ui.resume_current_marker": "current",
         "ui.resume_switched": "🔄 session: <code>{sid}</code>",
+        "ui.resume_selection_details": (
+            "Chat: <b>{title}</b>\nProject: <code>{cwd}</code>\nSend a message to continue."
+        ),
         "ui.resume_started": "🆕 tmux started with resume <code>{sid}</code>",
         "ui.resume_engine_switched": "↪️ Switching engine to <code>{engine}</code>",
         "ui.resume_picker_stale": "List is stale, open /resume again",
@@ -491,6 +494,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.resume_starting": "Возобновляю...",
         "ui.resume_current_marker": "текущая",
         "ui.resume_switched": "🔄 сессия: <code>{sid}</code>",
+        "ui.resume_selection_details": (
+            "Чат: <b>{title}</b>\nПроект: <code>{cwd}</code>\n"
+            "Отправьте сообщение, чтобы продолжить."
+        ),
         "ui.resume_started": "🆕 tmux поднят с resume <code>{sid}</code>",
         "ui.resume_engine_switched": "↪️ Переключаю движок на <code>{engine}</code>",
         "ui.resume_picker_stale": "Список устарел, открой /resume заново",

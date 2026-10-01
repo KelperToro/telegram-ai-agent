@@ -738,9 +738,16 @@ async def on_resume_pick(
         message_key = (
             "ui.resume_already_on_it" if current_sid == entry.session_id else "ui.resume_switched"
         )
-        await callback.message.edit_text(
-            t(message_key, sid=entry.session_id[:8]), reply_markup=None, parse_mode="HTML"
+        selection = (
+            t(message_key, sid=entry.session_id[:8])
+            + "\n"
+            + t(
+                "ui.resume_selection_details",
+                title=html.escape(entry.title or entry.preview),
+                cwd=html.escape(str(target_cwd)),
+            )
         )
+        await callback.message.edit_text(selection, reply_markup=None, parse_mode="HTML")
         await _replay_last_assistant_message(callback.message, entry, key, session_manager)
         return
 
