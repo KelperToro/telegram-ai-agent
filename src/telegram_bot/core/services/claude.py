@@ -489,7 +489,9 @@ class SessionManager:
         )
         return _get_mode_prompt(mode) + tg_context + prompt
 
-    def _build_exec_command(self, prompt: str, session: SessionData) -> ExecCommand:
+    def _build_exec_command(
+        self, prompt: str, session: SessionData, *, image_paths: tuple[str, ...] = ()
+    ) -> ExecCommand:
         """Provider-aware subprocess command.
 
         Claude keeps the historical argv-prompt contract. Codex receives the
@@ -557,6 +559,8 @@ class SessionManager:
         if session.model:
             # Insert before trailing "-" so the stdin marker remains last.
             argv[-1:-1] = ["--model", session.model]
+        for path in image_paths:
+            argv[-1:-1] = ["--image", path]
         return ExecCommand(
             argv=argv,
             cwd=cwd,
@@ -687,6 +691,7 @@ class SessionManager:
         on_event: Callable[[StreamEvent], Awaitable[bool | None] | bool | None],
         *,
         mcp_config: str,
+        image_paths: tuple[str, ...] = (),
     ) -> str:
         """Persist a new Windows Codex chat as a Desktop-visible thread."""
         cwd = session.cwd or str(self._default_cwd())
@@ -722,7 +727,7 @@ class SessionManager:
                     session.engine, thread_id, session.model
                 )
                 self._save_channel_sessions()
-                preview = " ".join(prompt.split())[:70].strip()
+                preview = " ".join(prompt.partition("\n")[0].split())[:70].strip()
                 try:
                     await client.call(
                         "thread/name/set",
@@ -739,7 +744,10 @@ class SessionManager:
                         "cwd": cwd,
                         "approvalPolicy": "never",
                         "sandboxPolicy": {"type": "dangerFullAccess"},
-                        "input": [{"type": "text", "text": full_prompt}],
+                        "input": [
+                            {"type": "text", "text": full_prompt},
+                            *({"type": "localImage", "path": path} for path in image_paths),
+                        ],
                     },
                 )
                 if not isinstance(started.get("turn"), dict):
@@ -793,6 +801,8 @@ class SessionManager:
         prompt: str,
         session: SessionData,
         on_event: Callable[[StreamEvent], Awaitable[bool | None] | bool | None],
+        *,
+        image_paths: tuple[str, ...] = (),
     ) -> str:
         """Run a CC subprocess, stream events via on_event, return final result."""
         session_id = session.session_id
@@ -821,7 +831,7 @@ class SessionManager:
                 app_mcp_config = session.mcp_config
                 exec_cmd = None
             else:
-                exec_cmd = self._build_exec_command(prompt, session)
+                exec_cmd = self._build_exec_command(prompt, session, image_paths=image_paths)
         except Exception:
             session.mcp_config = original_mcp_config
             if runtime_mcp_path is not None:
@@ -833,7 +843,11 @@ class SessionManager:
         if use_app_server:
             try:
                 result = await self._run_codex_app_first_turn(
-                    prompt, session, on_event, mcp_config=app_mcp_config
+                    prompt,
+                    session,
+                    on_event,
+                    mcp_config=app_mcp_config,
+                    image_paths=image_paths,
                 )
                 session.last_activity = time.monotonic()
                 return result
@@ -1237,6 +1251,7 @@ class SessionManager:
         on_event: Callable[[StreamEvent], Awaitable[bool | None] | bool | None],
         *,
         on_engine_changed: Callable[[str], Awaitable[None]] | None = None,
+        image_paths: tuple[str, ...] = (),
     ) -> str:
         """Send a prompt to CC with streaming events. Returns final response text.
 
@@ -1301,7 +1316,9 @@ class SessionManager:
 
             for attempt in range(2):
                 try:
-                    result = await self._run_cc_stream(prompt, session, on_event)
+                    result = await self._run_cc_stream(
+                        prompt, session, on_event, image_paths=image_paths
+                    )
                     if session.session_id:
                         self._channel_sessions[self._ch_key(channel_key)] = self._session_ref(
                             session.engine,

@@ -233,7 +233,8 @@ def test_resume_picker_shows_chat_name_and_project_on_buttons(tmp_path: Path) ->
     )
     assert "Fix database sync" in caption
     assert caption.index("Fix database sync") < caption.index("Newer chat")
-    assert str(project) in caption
+    assert project.name in caption
+    assert str(project) not in caption
     assert "1200" not in caption
 
 

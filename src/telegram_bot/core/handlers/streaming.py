@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import html
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -624,6 +625,7 @@ async def send_streaming_response(
     git_sync: Any | None = None,
     tmux_manager: TmuxManager | None = None,
     topic_config: TopicConfig | None = None,
+    image_paths: tuple[str, ...] = (),
 ) -> None:
     """Send prompt to CC with streaming and deliver response to user.
 
@@ -639,6 +641,7 @@ async def send_streaming_response(
     All message IDs are still recorded for reply-to-resume.
     """
     stream_mode = _resolve_stream_mode(topic_config, channel_key)
+    previous_session_id = session_manager.get_current_session_id(channel_key)
     # User-content preview — DEBUG only to keep INFO journalctl clean of PII.
     logger.debug(
         "Prompt to CC (channel %s, stream_mode=%s): %.200s",
@@ -859,6 +862,7 @@ async def send_streaming_response(
                 prompt,
                 on_event,
                 on_engine_changed=_notify_engine_changed,
+                image_paths=image_paths,
             )
     except asyncio.CancelledError:
         # Status messages ARE the history — no cleanup needed
@@ -890,5 +894,27 @@ async def send_streaming_response(
     final_text = response
     if not final_text:
         return
+
+    current_session_id = session_manager.get_current_session_id(channel_key)
+    if (
+        os.name == "nt"
+        and not used_tmux
+        and previous_session_id is None
+        and current_session_id is not None
+        and session_manager._get_session(channel_key).engine == "codex"
+        and final_text != t("ui.error_generic")
+    ):
+        title = " ".join(prompt.partition("\n")[0].split())[:70].strip() or "Codex"
+        try:
+            await message.answer(
+                t(
+                    "ui.codex_chat_created",
+                    title=html.escape(f"Telegram: {title}"),
+                    sid=current_session_id[:8],
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+        except TelegramAPIError:
+            logger.warning("Could not deliver Codex chat identity", exc_info=True)
 
     await _send_final_response(ctx, final_text)

@@ -272,6 +272,18 @@ def _make_media_callback(
             return
 
         prompt = _format_media_prompt(items, comment if comment else None)
+        image_paths = tuple(
+            path
+            for item in items
+            if (
+                item["type"] == "photo"
+                or (
+                    item["type"] == "document"
+                    and item.get("mime") in {"image/png", "image/jpeg", "image/webp"}
+                )
+            )
+            and isinstance(path := item.get("path"), str)
+        )
 
         # Tmux with active tail: send directly to CC stdin, bypass queue.
         if await send_to_tmux_if_active(key, prompt, last_msg, tmux_manager):
@@ -293,6 +305,7 @@ def _make_media_callback(
             tmux_manager,
             target_session_id=target_session_id,
             inject_reply_if_no_target=True,
+            image_paths=image_paths,
         )
 
     return on_media_batch

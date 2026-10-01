@@ -44,6 +44,7 @@ def enqueue_prompt(
     *,
     target_session_id: str | None,
     inject_reply_if_no_target: bool,
+    image_paths: tuple[str, ...] = (),
 ) -> None:
     """Final enqueue step shared by text/voice/photo/forward handlers.
 
@@ -77,4 +78,5 @@ def enqueue_prompt(
         source_msg,
         target_session_id=target_session_id,
         suppress_notification=tmux_manager.is_active(key),
+        image_paths=image_paths,
     )

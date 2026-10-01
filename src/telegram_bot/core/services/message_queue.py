@@ -26,6 +26,7 @@ class QueueItem:
 
     entries: list[tuple[int, str]]  # (message_id, prompt)
     source_messages: list[Message]
+    image_paths: list[str] = field(default_factory=list)
     target_session_id: str | None = None
     start_new_session: bool = False
 
@@ -106,6 +107,7 @@ class MessageQueue:
         target_session_id: str | None = None,
         start_new_session: bool = False,
         suppress_notification: bool = False,
+        image_paths: tuple[str, ...] = (),
     ) -> None:
         """Add a message to the channel's queue.
 
@@ -120,6 +122,7 @@ class MessageQueue:
             item = QueueItem(
                 entries=[(message_id, prompt)],
                 source_messages=[source_message],
+                image_paths=list(image_paths),
                 target_session_id=target_session_id,
                 start_new_session=start_new_session,
             )
@@ -148,6 +151,7 @@ class MessageQueue:
             ):
                 item.entries.append((message_id, prompt))
                 item.source_messages.append(source_message)
+                item.image_paths.extend(image_paths)
                 batched = True
                 # Find position of this item in queue (1-based)
                 position = list(queue.items).index(item) + 1
@@ -164,6 +168,7 @@ class MessageQueue:
             item = QueueItem(
                 entries=[(message_id, prompt)],
                 source_messages=[source_message],
+                image_paths=list(image_paths),
                 target_session_id=target_session_id,
                 start_new_session=start_new_session,
             )
@@ -259,21 +264,18 @@ class MessageQueue:
                 )
 
                 try:
+                    extra: dict[str, object] = {}
                     if item.start_new_session:
-                        await self._process_callback(
-                            channel_key,
-                            combined_prompt,
-                            item.source_messages,
-                            item.target_session_id,
-                            start_new_session=True,
-                        )
-                    else:
-                        await self._process_callback(
-                            channel_key,
-                            combined_prompt,
-                            item.source_messages,
-                            item.target_session_id,
-                        )
+                        extra["start_new_session"] = True
+                    if item.image_paths:
+                        extra["image_paths"] = tuple(item.image_paths)
+                    await self._process_callback(
+                        channel_key,
+                        combined_prompt,
+                        item.source_messages,
+                        item.target_session_id,
+                        **extra,
+                    )
                     queue.error_count = 0
                 except Exception:
                     # Drop semantics: the item was already popped above and is

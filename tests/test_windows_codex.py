@@ -20,6 +20,7 @@ from telegram_bot.core.services.claude import SessionData, SessionManager
 from telegram_bot.core.services.codex_app_server import (
     CodexAppServerError,
     _thread_list_label,
+    list_codex_thread_titles,
     stream_event_from_notification,
 )
 from telegram_bot.core.services.codex_mcp import build_codex_mcp_config_args
@@ -67,6 +68,63 @@ def test_resume_lists_desktop_session_for_matching_cwd(
     ]
 
 
+def test_resume_excludes_subagent_with_second_desktop_metadata(tmp_path: Path) -> None:
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    root = tmp_path / ".codex" / "sessions" / "2026" / "10" / "01"
+    root.mkdir(parents=True)
+    session_id = "018f0000-0000-7000-8000-000000000001"
+    (root / "subagent.jsonl").write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": session_id,
+                        "cwd": str(cwd),
+                        "source": {"subagent": {"thread_spawn": {"depth": 1}}},
+                    },
+                },
+                {
+                    "type": "session_meta",
+                    "payload": {"id": session_id, "cwd": str(cwd), "source": "vscode"},
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert list_sessions(cwd, home=tmp_path, all_codex=True) == []
+
+
+@pytest.mark.asyncio
+async def test_resume_reads_name_of_chat_missing_from_thread_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import telegram_bot.core.services.codex_app_server as app_server
+
+    sid = "018f0000-0000-7000-8000-000000000001"
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+            if method == "thread/list":
+                assert params["archived"] in (False, True)
+                return {"data": []}
+            assert method == "thread/read"
+            assert params == {"threadId": sid, "includeTurns": False}
+            return {"thread": {"id": sid, "name": "Older desktop chat"}}
+
+    monkeypatch.setattr(app_server, "CodexAppServerClient", FakeClient)
+    assert await list_codex_thread_titles(fallback_ids=[sid]) == {sid: "Older desktop chat"}
+
+
 def test_desktop_first_turn_progress_preserves_status_and_commentary() -> None:
     started = stream_event_from_notification(
         {"method": "turn/started", "params": {"turn": {"id": "turn-1"}}}
@@ -112,6 +170,28 @@ def test_desktop_first_turn_progress_preserves_status_and_commentary() -> None:
     assert completed is not None and (completed.type, completed.turn_id) == ("turn_end", "turn-1")
 
 
+def test_codex_exec_attaches_photo_on_new_and_resumed_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import telegram_bot.core.services.claude as claude
+
+    monkeypatch.setattr(claude.CODEX_ADAPTER, "binary", lambda: "codex")
+    monkeypatch.setattr(claude, "codex_process_env", lambda: {})
+    monkeypatch.setattr(claude, "discover_codex_mcp_server_names", lambda *_a, **_kw: [])
+    monkeypatch.setattr(claude, "build_codex_mcp_config_args", lambda *_a, **_kw: [])
+    manager = SessionManager(
+        Settings(telegram_bot_token="123:test", project_root=str(tmp_path), _env_file=None)
+    )
+    session = SessionData(engine="codex", cwd=str(tmp_path), chat_id=123, thread_id=None)
+    photo = str(tmp_path / "photo.jpg")
+
+    fresh = manager._build_exec_command("Describe it", session, image_paths=(photo,))
+    assert fresh.argv[-3:] == ["--image", photo, "-"]
+    session.session_id = "018f0000-0000-7000-8000-000000000001"
+    resumed = manager._build_exec_command("Describe it", session, image_paths=(photo,))
+    assert resumed.argv[-3:] == ["--image", photo, "-"]
+
+
 @pytest.mark.asyncio
 async def test_desktop_first_turn_survives_unsupported_thread_naming(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -119,6 +199,7 @@ async def test_desktop_first_turn_survives_unsupported_thread_naming(
     import telegram_bot.core.services.claude as claude
 
     calls: list[str] = []
+    turn_inputs: list[dict[str, object]] = []
 
     class FakeClient:
         process = None
@@ -139,6 +220,7 @@ async def test_desktop_first_turn_survives_unsupported_thread_naming(
             if method == "thread/name/set":
                 raise CodexAppServerError("unsupported method")
             if method == "turn/start":
+                turn_inputs.extend(_params["input"])
                 return {"turn": {"id": "turn-1"}}
             raise AssertionError(method)
 
@@ -172,12 +254,13 @@ async def test_desktop_first_turn_survives_unsupported_thread_naming(
     )
     session = SessionData(engine="codex", cwd=str(tmp_path), chat_id=123, thread_id=None)
     answer = await manager._run_codex_app_first_turn(
-        "Hello", session, lambda _event: None, mcp_config=""
+        "Hello", session, lambda _event: None, mcp_config="", image_paths=("image.jpg",)
     )
 
     assert answer == "Done"
     assert session.session_id == "018f0000-0000-7000-8000-000000000001"
     assert calls == ["thread/start", "thread/name/set", "turn/start"]
+    assert turn_inputs[-1] == {"type": "localImage", "path": "image.jpg"}
 
 
 def test_resume_uses_desktop_preview_when_thread_has_no_name() -> None:

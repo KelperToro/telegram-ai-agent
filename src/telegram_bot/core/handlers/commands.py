@@ -145,12 +145,13 @@ def _resume_caption(
         preview = html.escape(label)
         prefix = "✅ " if entry.session_id == current_session_id else ""
         parts = [f"{prefix}{idx + 1}. <b>{preview}</b>"]
-        details = [provider, _format_age(entry.mtime), html.escape(entry.session_id[:8])]
+        details = [provider, _format_age(entry.mtime)]
+        if entry.cwd is not None and all_projects:
+            details.append("📁 " + html.escape(entry.cwd.name))
+        details.append(html.escape(entry.session_id[:8]))
         if entry.session_id == current_session_id:
             details.append(t("ui.resume_current_marker"))
         block_lines = ["".join(parts), "   " + " · ".join(details)]
-        if entry.cwd is not None and not _same_cwd(entry.cwd, cwd):
-            block_lines.append(f"   <code>{html.escape(str(entry.cwd))}</code>")
         blocks.append("\n".join(block_lines))
     return "\n\n".join([text, *blocks])
 
@@ -494,7 +495,9 @@ async def handle_resume(
     entries = tuple(await asyncio.to_thread(list_sessions, runtime.cwd, all_codex=private_chat))
     if private_chat:
         try:
-            names = await list_codex_thread_titles()
+            names = await list_codex_thread_titles(
+                fallback_ids=(entry.session_id for entry in entries if entry.provider == "codex")
+            )
         except (CodexAppServerError, OSError, TimeoutError):
             logger.warning("Could not load Codex thread names", exc_info=True)
             names = {}

@@ -221,10 +221,11 @@ def _codex_meta(path: Path, *, max_records: int = 3) -> tuple[str, str] | None:
         if not isinstance(payload, dict):
             continue
         source = payload.get("source")
-        if isinstance(source, dict) and "subagent" in source:
-            continue
-        if source == "subagent":
-            continue
+        # A subagent rollout can contain a second session_meta row that looks
+        # like a regular Desktop thread. The first row is authoritative: once
+        # it identifies a subagent, never surface this file in /resume.
+        if (isinstance(source, dict) and "subagent" in source) or source == "subagent":
+            return None
         session_id = payload.get("id")
         cwd = payload.get("cwd")
         if isinstance(session_id, str) and isinstance(cwd, str):

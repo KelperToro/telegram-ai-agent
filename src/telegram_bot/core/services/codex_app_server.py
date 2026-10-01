@@ -7,7 +7,7 @@ import contextlib
 import json
 import logging
 import tomllib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -281,35 +281,54 @@ def _thread_list_label(item: dict[str, Any]) -> str | None:
     return normalized[:120]
 
 
-async def list_codex_thread_titles(*, max_threads: int = 500) -> dict[str, str]:
+async def list_codex_thread_titles(
+    *, max_threads: int = 500, fallback_ids: Iterable[str] = ()
+) -> dict[str, str]:
     """Read Desktop chat names without hydrating large conversation histories."""
     names: dict[str, str] = {}
-    cursor: str | None = None
-    scanned = 0
     async with CodexAppServerClient() as client:
-        while scanned < max_threads:
-            params: dict[str, Any] = {
-                "limit": min(100, max_threads - scanned),
-                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
-            }
-            if cursor is not None:
-                params["cursor"] = cursor
-            result = await client.call("thread/list", params)
-            data = result.get("data")
-            if not isinstance(data, list) or not data:
-                break
-            scanned += len(data)
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                thread_id = item.get("id")
-                title = _thread_list_label(item)
-                if isinstance(thread_id, str) and title:
-                    names[thread_id] = title
-            next_cursor = result.get("nextCursor")
-            if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
-                break
-            cursor = next_cursor
+        for archived in (False, True):
+            cursor: str | None = None
+            scanned = 0
+            while scanned < max_threads:
+                params: dict[str, Any] = {
+                    "limit": min(100, max_threads - scanned),
+                    "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                    "archived": archived,
+                }
+                if cursor is not None:
+                    params["cursor"] = cursor
+                result = await client.call("thread/list", params)
+                data = result.get("data")
+                if not isinstance(data, list) or not data:
+                    break
+                scanned += len(data)
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    thread_id = item.get("id")
+                    title = _thread_list_label(item)
+                    if isinstance(thread_id, str) and title:
+                        names[thread_id] = title
+                next_cursor = result.get("nextCursor")
+                if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+                    break
+                cursor = next_cursor
+        # Some older local rollouts are readable by ID but omitted from
+        # thread/list. Fetch only their metadata; includeTurns=False avoids
+        # loading large histories just to label /resume buttons.
+        for thread_id in dict.fromkeys(fallback_ids):
+            if thread_id in names:
+                continue
+            try:
+                result = await client.call(
+                    "thread/read", {"threadId": thread_id, "includeTurns": False}
+                )
+            except CodexAppServerError:
+                continue
+            thread = result.get("thread")
+            if isinstance(thread, dict) and (title := _thread_list_label(thread)):
+                names[thread_id] = title
     return names
 
 

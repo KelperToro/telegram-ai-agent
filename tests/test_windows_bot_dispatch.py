@@ -17,6 +17,7 @@ from aiogram.types import (
     Document,
     Message,
     MessageOriginHiddenUser,
+    PhotoSize,
     RichBlockParagraph,
     RichMessage,
     Update,
@@ -53,9 +54,9 @@ class FakeTelegramBot(Bot):
         )
 
     async def download(self, file: Any, destination: Any = None, **_kwargs: Any) -> Path:
-        assert file == "document"
+        assert file in {"document", "photo"}
         path = Path(destination)
-        path.write_bytes(b"telegram file content")
+        path.write_bytes(b"telegram file content" if file == "document" else b"photo bytes")
         return path
 
 
@@ -96,9 +97,11 @@ async def test_text_document_forward_and_rich_updates_reach_codex(tmp_path: Path
     tmux_manager = TmuxManager(tmp_path / "tmux")
     batcher = ImmediateBatcher()
     prompts: list[str] = []
+    attached_images: list[tuple[str, ...]] = []
 
     async def fake_codex(channel_key: Any, prompt: str, _on_event: Any, **_kwargs: Any) -> str:
         prompts.append(prompt)
+        attached_images.append(_kwargs.get("image_paths", ()))
         session_manager._get_session(
             channel_key
         ).session_id = "018f0000-0000-7000-8000-000000000001"
@@ -111,6 +114,8 @@ async def test_text_document_forward_and_rich_updates_reach_codex(tmp_path: Path
         prompt: str,
         source_messages: list[Message],
         target_session_id: str | None,
+        *,
+        image_paths: tuple[str, ...] = (),
     ) -> None:
         await process_queue_item(
             channel_key,
@@ -120,6 +125,7 @@ async def test_text_document_forward_and_rich_updates_reach_codex(tmp_path: Path
             bot=bot,
             session_manager=session_manager,
             tmux_manager=tmux_manager,
+            image_paths=image_paths,
         )
 
     queue = MessageQueue(bot, session_manager, process)
@@ -186,6 +192,34 @@ async def test_text_document_forward_and_rich_updates_reach_codex(tmp_path: Path
                 ),
             ),
         ),
+        Update(
+            update_id=5,
+            message=Message(
+                message_id=5,
+                date=now,
+                chat=chat,
+                from_user=user,
+                caption="describe this",
+                photo=[PhotoSize(file_id="photo", file_unique_id="photo1", width=2, height=2)],
+            ),
+        ),
+        Update(
+            update_id=6,
+            message=Message(
+                message_id=6,
+                date=now,
+                chat=chat,
+                from_user=user,
+                caption="read original image",
+                document=Document(
+                    file_id="document",
+                    file_unique_id="image-doc",
+                    file_name="original.png",
+                    mime_type="image/png",
+                    file_size=21,
+                ),
+            ),
+        ),
     ]
     try:
         for update in updates:
@@ -198,8 +232,13 @@ async def test_text_document_forward_and_rich_updates_reach_codex(tmp_path: Path
         assert "пример файл.txt" in prompts[1]
         assert "forwarded hello" in prompts[2]
         assert "rich hello" in prompts[3]
+        assert "describe this" in prompts[4]
+        assert len(attached_images[4]) == 1
+        assert Path(attached_images[4][0]).is_file()
+        assert len(attached_images[5]) == 1
+        assert attached_images[5][0].endswith("original.png")
         assert next((tmp_path / "data").glob("*.txt")).read_text() == "telegram file content"
-        assert [text for _chat, text in bot.sent if text == "PONG"] == ["PONG"] * 4
+        assert [text for _chat, text in bot.sent if text == "PONG"] == ["PONG"] * 6
         assert all(chat_id == 456 for chat_id, _text in bot.sent)
     finally:
         await queue.shutdown()

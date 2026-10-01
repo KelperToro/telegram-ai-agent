@@ -34,7 +34,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.recognizing_voice": "⏳ Transcribing voice...",
         "ui.processing_forwards": "⏳ Processing forwarded messages...",
         "ui.processing_files": "⏳ Processing files...",
-        "ui.new_session": "The next message will create a new chat.",
+        "ui.new_session": (
+            "The next message will create a new chat. Find it in Codex Desktop Recents or /resume."
+        ),
+        "ui.codex_chat_created": (
+            "🆕 Codex Desktop chat created: <b>{title}</b> (<code>{sid}</code>). "
+            "It is first in /resume."
+        ),
         "ui.context_cleared": "🧹 Context cleared, tmux session alive",
         "ui.reset_failed": "❌ Couldn't reset the context. Try again in a moment.",
         "ui.topic_welcome": (
@@ -347,7 +353,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.recognizing_voice": "⏳ Распознаю голосовое...",
         "ui.processing_forwards": "⏳ Обрабатываю пересланные сообщения...",
         "ui.processing_files": "⏳ Обрабатываю файлы...",
-        "ui.new_session": "Следующее сообщение создаст новый чат.",
+        "ui.new_session": (
+            "Следующее сообщение создаст новый чат. Ищи его в «Недавних» "
+            "Codex Desktop или через /resume."
+        ),
+        "ui.codex_chat_created": (
+            "🆕 Создан чат Codex Desktop: <b>{title}</b> (<code>{sid}</code>). "
+            "В /resume он будет первым."
+        ),
         "ui.context_cleared": "🧹 Контекст очищен, tmux-сессия жива",
         "ui.reset_failed": "❌ Не удалось обновить контекст. Попробуй ещё раз через пару секунд.",
         "ui.topic_welcome": (

@@ -114,6 +114,16 @@ async def handle_forward(
         )
         batch = list(processed)
         prompt = _format_batch_prompt(batch, comment)
+        image_paths = tuple(
+            path
+            for raw, item in zip(raw_messages, batch, strict=True)
+            if raw.photo
+            or (
+                raw.document is not None
+                and raw.document.mime_type in {"image/png", "image/jpeg", "image/webp"}
+            )
+            for path in item.file_paths
+        )
 
         # Tmux with active tail: send directly to CC stdin, bypass queue.
         if await send_to_tmux_if_active(key, prompt, last_msg, tmux_manager):
@@ -138,6 +148,7 @@ async def handle_forward(
             # Forwarded batches already have their own structure; injecting a
             # reply quote would confuse the agent about whose content is whose.
             inject_reply_if_no_target=False,
+            image_paths=image_paths,
         )
 
     forward_batcher.add(key, message, on_batch)

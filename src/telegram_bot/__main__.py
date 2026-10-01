@@ -139,6 +139,7 @@ async def process_queue_item(
     bot: Bot,
     session_manager: SessionManager,
     tmux_manager: TmuxManager,
+    image_paths: tuple[str, ...] = (),
 ) -> None:
     """Send a queued prompt to CC; on session change, notify the user."""
     old_session_id = session_manager.get_current_session_id(channel_key)
@@ -172,7 +173,12 @@ async def process_queue_item(
     if reply_message is None:
         return
     await send_streaming_response(
-        reply_message, session_manager, channel_key, prompt, tmux_manager=tmux_manager
+        reply_message,
+        session_manager,
+        channel_key,
+        prompt,
+        tmux_manager=tmux_manager,
+        image_paths=image_paths,
     )
 
 
@@ -226,6 +232,8 @@ async def _start() -> None:
         prompt: str,
         source_messages: list[Message],
         target_session_id: str | None,
+        *,
+        image_paths: tuple[str, ...] = (),
     ) -> None:
         await process_queue_item(
             channel_key,
@@ -235,6 +243,7 @@ async def _start() -> None:
             bot=bot,
             session_manager=session_manager,
             tmux_manager=tmux_manager,
+            image_paths=image_paths,
         )
 
     message_queue = MessageQueue(bot, session_manager, _process_queue_item)
