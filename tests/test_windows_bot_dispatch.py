@@ -12,11 +12,12 @@ import pytest
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatType
 from aiogram.methods import SendMessage
-from aiogram.types import Chat, Document, Message, Update, User
+from aiogram.types import Chat, Document, Message, MessageOriginHiddenUser, Update, User
 
 import telegram_bot.__main__ as entrypoint
 from telegram_bot.__main__ import process_queue_item
 from telegram_bot.core.config import Settings
+from telegram_bot.core.handlers.forward import router as forward_router
 from telegram_bot.core.handlers.photo import router as photo_router
 from telegram_bot.core.handlers.text import router as text_router
 from telegram_bot.core.middleware.auth import AuthMiddleware
@@ -57,6 +58,9 @@ class ImmediateBatcher:
         self.tasks.append(asyncio.create_task(callback(text, message)))
 
     def add_media(self, _key: Any, message: Message, callback: Any) -> None:
+        self.tasks.append(asyncio.create_task(callback([message])))
+
+    def add(self, _key: Any, message: Message, callback: Any) -> None:
         self.tasks.append(asyncio.create_task(callback([message])))
 
     def get_comment(self, _key: Any) -> list[str]:
@@ -113,10 +117,12 @@ async def test_text_and_document_updates_reach_codex_and_reply(tmp_path: Path) -
     dp = Dispatcher()
     dp.message.outer_middleware(AuthMiddleware([123]))
     dp.message.filter(F.chat.type == ChatType.PRIVATE)
+    dp.include_router(forward_router)
     dp.include_router(photo_router)
     dp.include_router(text_router)
     dp["session_manager"] = session_manager
     dp["forward_batcher"] = batcher
+    dp["transcriber"] = object()
     dp["message_queue"] = queue
     dp["tmux_manager"] = tmux_manager
     dp["topic_config"] = topic_config
@@ -146,6 +152,19 @@ async def test_text_and_document_updates_reach_codex_and_reply(tmp_path: Path) -
                 ),
             ),
         ),
+        Update(
+            update_id=3,
+            message=Message(
+                message_id=3,
+                date=now,
+                chat=chat,
+                from_user=user,
+                text="forwarded hello",
+                forward_origin=MessageOriginHiddenUser(
+                    type="hidden_user", date=now, sender_user_name="Alice"
+                ),
+            ),
+        ),
     ]
     try:
         for update in updates:
@@ -156,8 +175,9 @@ async def test_text_and_document_updates_reach_codex_and_reply(tmp_path: Path) -
         assert prompts[0] == "ping"
         assert "read this" in prompts[1]
         assert "пример файл.txt" in prompts[1]
+        assert "forwarded hello" in prompts[2]
         assert next((tmp_path / "data").glob("*.txt")).read_text() == "telegram file content"
-        assert [text for _chat, text in bot.sent if text == "PONG"] == ["PONG", "PONG"]
+        assert [text for _chat, text in bot.sent if text == "PONG"] == ["PONG"] * 3
         assert all(chat_id == 456 for chat_id, _text in bot.sent)
     finally:
         await queue.shutdown()
@@ -178,6 +198,7 @@ async def test_windows_bot_startup_uses_polling_and_shuts_down(
     )
     monkeypatch.setattr(entrypoint, "get_settings", lambda: settings)
     # The update-routing test has already attached these module-level routers.
+    monkeypatch.setattr(entrypoint, "forward_router", Router(name="startup-forward"))
     monkeypatch.setattr(entrypoint, "photo_router", Router(name="startup-photo"))
     monkeypatch.setattr(entrypoint, "text_router", Router(name="startup-text"))
     broker_dirs: list[Path] = []
