@@ -38,8 +38,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "The next message will create a new chat. Find it in Codex Desktop Recents or /resume."
         ),
         "ui.codex_chat_created": (
-            "🆕 Codex Desktop chat created: <b>{title}</b> (<code>{sid}</code>). "
-            "It is first in /resume."
+            "🆕 Codex Desktop chat: <b>{title}</b> in <code>{project}</code> "
+            "(ID <code>{sid}</code>). Find it in Desktop Recents or first in /resume."
         ),
         "ui.context_cleared": "🧹 Context cleared, tmux session alive",
         "ui.reset_failed": "❌ Couldn't reset the context. Try again in a moment.",
@@ -358,8 +358,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Codex Desktop или через /resume."
         ),
         "ui.codex_chat_created": (
-            "🆕 Создан чат Codex Desktop: <b>{title}</b> (<code>{sid}</code>). "
-            "В /resume он будет первым."
+            "🆕 Чат Codex Desktop: <b>{title}</b> в проекте <code>{project}</code> "
+            "(ID <code>{sid}</code>). Ищи в «Недавних» или первым в /resume."
         ),
         "ui.context_cleared": "🧹 Контекст очищен, tmux-сессия жива",
         "ui.reset_failed": "❌ Не удалось обновить контекст. Попробуй ещё раз через пару секунд.",

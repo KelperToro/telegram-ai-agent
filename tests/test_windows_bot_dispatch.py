@@ -239,6 +239,7 @@ async def test_text_document_forward_and_rich_updates_reach_codex(tmp_path: Path
         assert attached_images[5][0].endswith("original.png")
         assert next((tmp_path / "data").glob("*.txt")).read_text() == "telegram file content"
         assert [text for _chat, text in bot.sent if text == "PONG"] == ["PONG"] * 6
+        assert any("Codex Desktop" in text and "018f0000" in text for _, text in bot.sent)
         assert all(chat_id == 456 for chat_id, _text in bot.sent)
     finally:
         await queue.shutdown()

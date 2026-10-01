@@ -9,6 +9,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from aiogram.enums import ChatType, ParseMode
@@ -896,25 +897,32 @@ async def send_streaming_response(
         return
 
     current_session_id = session_manager.get_current_session_id(channel_key)
+    session = session_manager._get_session(channel_key)
+    await _send_final_response(ctx, final_text)
     if (
         os.name == "nt"
         and not used_tmux
         and previous_session_id is None
         and current_session_id is not None
-        and session_manager._get_session(channel_key).engine == "codex"
+        and session.engine == "codex"
         and final_text != t("ui.error_generic")
     ):
         title = " ".join(prompt.partition("\n")[0].split())[:70].strip() or "Codex"
         try:
-            await message.answer(
+            notice = await message.answer(
                 t(
                     "ui.codex_chat_created",
                     title=html.escape(f"Telegram: {title}"),
                     sid=current_session_id[:8],
+                    project=html.escape(Path(session.cwd).name),
                 ),
                 parse_mode=ParseMode.HTML,
             )
+            session_manager.record_message(notice.message_id, current_session_id, channel_key)
+            logger.info(
+                "Announced new Codex Desktop chat channel=%s session_id=%s",
+                channel_key,
+                current_session_id,
+            )
         except TelegramAPIError:
             logger.warning("Could not deliver Codex chat identity", exc_info=True)
-
-    await _send_final_response(ctx, final_text)
