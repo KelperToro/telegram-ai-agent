@@ -12,7 +12,16 @@ import pytest
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatType
 from aiogram.methods import SendMessage
-from aiogram.types import Chat, Document, Message, MessageOriginHiddenUser, Update, User
+from aiogram.types import (
+    Chat,
+    Document,
+    Message,
+    MessageOriginHiddenUser,
+    RichBlockParagraph,
+    RichMessage,
+    Update,
+    User,
+)
 
 import telegram_bot.__main__ as entrypoint
 from telegram_bot.__main__ import process_queue_item
@@ -74,7 +83,7 @@ class ImmediateBatcher:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Telegram dispatch")
-async def test_text_and_document_updates_reach_codex_and_reply(tmp_path: Path) -> None:
+async def test_text_document_forward_and_rich_updates_reach_codex(tmp_path: Path) -> None:
     bot = FakeTelegramBot()
     settings = Settings(
         telegram_bot_token="123:local-test",
@@ -165,6 +174,18 @@ async def test_text_and_document_updates_reach_codex_and_reply(tmp_path: Path) -
                 ),
             ),
         ),
+        Update(
+            update_id=4,
+            message=Message(
+                message_id=4,
+                date=now,
+                chat=chat,
+                from_user=user,
+                rich_message=RichMessage(
+                    blocks=[RichBlockParagraph(type="paragraph", text="rich hello")]
+                ),
+            ),
+        ),
     ]
     try:
         for update in updates:
@@ -176,8 +197,9 @@ async def test_text_and_document_updates_reach_codex_and_reply(tmp_path: Path) -
         assert "read this" in prompts[1]
         assert "пример файл.txt" in prompts[1]
         assert "forwarded hello" in prompts[2]
+        assert "rich hello" in prompts[3]
         assert next((tmp_path / "data").glob("*.txt")).read_text() == "telegram file content"
-        assert [text for _chat, text in bot.sent if text == "PONG"] == ["PONG"] * 3
+        assert [text for _chat, text in bot.sent if text == "PONG"] == ["PONG"] * 4
         assert all(chat_id == 456 for chat_id, _text in bot.sent)
     finally:
         await queue.shutdown()
