@@ -12,10 +12,10 @@ import tempfile
 from pathlib import Path
 
 from telegram_bot.core.config import Settings
+from telegram_bot.core.services.cc_events import StreamEvent
 from telegram_bot.core.services.claude import SessionManager
 from telegram_bot.core.services.tmux_manager import TmuxManager
 from telegram_bot.core.services.windows_pty import configure_broker, run_tmux
-from telegram_bot.core.types import StreamEvent
 
 
 async def main() -> int:
