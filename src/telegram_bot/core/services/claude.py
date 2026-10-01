@@ -1321,6 +1321,13 @@ class SessionManager:
                     )
                     return t("ui.codex_thread_busy")
                 except (CodexAppServerError, TimeoutError):
+                    if session.cancelled:
+                        logger.info(
+                            "Codex Desktop first turn cancelled, preserving session_id=%s",
+                            session.session_id,
+                        )
+                        session.cancelled = False
+                        return ""
                     logger.warning("Could not create Codex Desktop thread", exc_info=True)
                     return t("ui.error_generic")
                 except (CCTimeoutError, CCProcessError, CCInactivityError) as exc:

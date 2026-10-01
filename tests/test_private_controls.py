@@ -24,6 +24,7 @@ from telegram_bot.core.handlers.commands import (
 )
 from telegram_bot.core.keyboards import resume_keyboard
 from telegram_bot.core.services.claude import CCSessionBusyError, SessionManager
+from telegram_bot.core.services.codex_app_server import CodexAppServerError
 from telegram_bot.core.services.picker_store import PickerState, PickerStore
 from telegram_bot.core.services.resume_listing import SessionEntry, list_sessions
 from telegram_bot.core.services.topic_config import TopicConfig, config_id_for_channel
@@ -271,3 +272,27 @@ async def test_busy_codex_chat_keeps_selected_session(
     result = await manager.send_stream((456, None), "hello", lambda _event: None)
     assert "another" in result.lower() or "занят" in result.lower()
     assert manager.get_current_session_id((456, None)) == sid
+
+
+@pytest.mark.asyncio
+async def test_cancelled_desktop_first_turn_keeps_created_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import telegram_bot.core.services.claude as claude
+
+    settings = Settings(telegram_bot_token="123:test", project_root=str(tmp_path), _env_file=None)
+    manager = SessionManager(settings)
+    session = manager._get_session((456, None))
+    session.engine = "codex"
+    sid = "018f0000-0000-7000-8000-000000000001"
+    monkeypatch.setattr(claude, "choose_available_engine", lambda _requested: "codex")
+
+    async def interrupted(*_args: Any, **_kwargs: Any) -> str:
+        session.session_id = sid
+        session.cancelled = True
+        raise CodexAppServerError("app-server closed during turn")
+
+    monkeypatch.setattr(manager, "_run_cc_stream", interrupted)
+    assert await manager.send_stream((456, None), "hello", lambda _event: None) == ""
+    assert manager.get_current_session_id((456, None)) == sid
+    assert not session.cancelled

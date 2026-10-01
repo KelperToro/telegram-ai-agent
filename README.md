@@ -5,7 +5,7 @@
 [Русская версия](README.ru.md)
 
 Telegram AI Agent is an open-source Telegram bot for controlling Claude Code and
-Codex CLI on your VPS. It turns Telegram into a remote interface for agentic
+Codex on your computer or VPS. It turns Telegram into a remote interface for agentic
 coding: open a topic for a project, send tasks from your phone, attach files or
 voice notes, watch progress, resume old sessions, and drive the live terminal
 UI when the agent needs input.
@@ -78,7 +78,9 @@ have its own:
 
 ## Requirements
 
-You need a Linux machine or VPS where the bot and agent CLIs will run.
+The setup below is for Linux. On Windows, run the bot and Codex on the same PC
+using the [Windows guide](README.windows.md); Telegram long polling needs only
+an outgoing internet connection.
 
 - Python 3.12+
 - `uv`
