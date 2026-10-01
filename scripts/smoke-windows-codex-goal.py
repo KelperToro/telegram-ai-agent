@@ -23,8 +23,18 @@ async def main(thread_id: str) -> None:
         observed = await get_thread_goal(thread_id)
         print("set:", set_result.get("objective"), set_result.get("status"))
         print("get:", observed.get("objective") if observed else None)
-        if observed is None or observed.get("objective") != "Telegram goal smoke":
+        if (
+            observed is None
+            or observed.get("objective") != "Telegram goal smoke"
+            or observed.get("tokenBudget") != 1000
+        ):
             raise SystemExit(1)
+        for status in ("paused", "active", "complete"):
+            changed = await set_thread_goal(thread_id, status=status)
+            reread = await get_thread_goal(thread_id)
+            if changed.get("status") != status or reread is None or reread.get("status") != status:
+                raise SystemExit(f"Goal status did not become {status}")
+            print("status:", status)
     finally:
         print("cleared:", await clear_thread_goal(thread_id))
 

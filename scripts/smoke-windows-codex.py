@@ -11,6 +11,7 @@ from pathlib import Path
 
 from telegram_bot.core.config import Settings
 from telegram_bot.core.services.claude import SessionManager
+from telegram_bot.core.services.topic_config import TopicConfig, config_id_for_channel
 
 
 async def main() -> int:
@@ -77,6 +78,37 @@ async def main() -> int:
         print(f"Restored response: {third!r}; session: {restored.get_current_session_id(key)}")
         if "amber" not in third.lower() or restored.get_current_session_id(key) != first_id:
             return 1
+        if "--cross-project" in sys.argv[1:]:
+            other_cwd = tmp / "other-project"
+            other_cwd.mkdir()
+            other_settings = Settings(
+                telegram_bot_token="123:local-test",
+                project_root=str(app_root),
+                agent_workspace_root=str(tmp),
+                default_cwd=str(other_cwd),
+                file_cache_dir=str(tmp / "data"),
+                cc_query_timeout_sec=180,
+                cc_inactivity_kill_sec=180,
+            )
+            topic_config = TopicConfig(str(tmp / "topics.json"), str(tmp))
+            switched = SessionManager(other_settings, topic_config=topic_config)
+            if Path(switched._get_session(key).cwd or "").resolve() != other_cwd.resolve():
+                return 1
+            config_id = config_id_for_channel(key)
+            assert config_id is not None
+            if not await topic_config.update_engine_cwd(config_id, "codex", cwd):
+                return 1
+            await switched.override_session(key, first_id, provider="codex")
+            cross_answer = await switched.send_stream(
+                key, "What was the secret word? Answer with the word only.", on_event
+            )
+            print(f"Cross-project response: {cross_answer!r}")
+            if (
+                "amber" not in cross_answer.lower()
+                or switched.get_current_session_id(key) != first_id
+                or Path(switched._get_session(key).cwd or "").resolve() != cwd.resolve()
+            ):
+                return 1
     return 0
 
 
