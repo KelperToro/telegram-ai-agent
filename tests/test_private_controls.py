@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,6 +13,7 @@ import pytest
 
 from telegram_bot.core.config import Settings
 from telegram_bot.core.handlers.commands import (
+    _pin_current_session,
     _resume_caption,
     handle_engine_command,
     handle_goal,
@@ -206,7 +208,15 @@ def test_resume_picker_shows_chat_name_and_project_on_buttons(tmp_path: Path) ->
         project,
         "Fix database sync",
     )
-    keyboard = resume_keyboard((entry,), page=0, current_session_id=sid, token="abc")
+    newer = replace(
+        entry,
+        session_id="018f0000-0000-7000-8000-000000000002",
+        title="Newer chat",
+        mtime=entry.mtime + 1,
+    )
+    ordered = _pin_current_session((newer, entry), sid)
+    assert ordered == (entry, newer)
+    keyboard = resume_keyboard(ordered, page=0, current_session_id=sid, token="abc")
     button = keyboard.inline_keyboard[0][0]
     assert "kombain" in button.text
     assert "Fix database sync" in button.text
@@ -217,11 +227,12 @@ def test_resume_picker_shows_chat_name_and_project_on_buttons(tmp_path: Path) ->
         tmp_path,
         page=0,
         total_pages=1,
-        entries=(entry,),
+        entries=ordered,
         current_session_id=sid,
         all_projects=True,
     )
     assert "Fix database sync" in caption
+    assert caption.index("Fix database sync") < caption.index("Newer chat")
     assert str(project) in caption
     assert "1200" not in caption
 

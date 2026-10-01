@@ -155,6 +155,17 @@ def _resume_caption(
     return "\n\n".join([text, *blocks])
 
 
+def _pin_current_session(
+    entries: tuple[SessionEntry, ...], current_session_id: str | None
+) -> tuple[SessionEntry, ...]:
+    if current_session_id is None:
+        return entries
+    for index, entry in enumerate(entries):
+        if entry.session_id == current_session_id:
+            return (entry, *entries[:index], *entries[index + 1 :])
+    return entries
+
+
 @router.message(CommandStart())
 async def handle_start(message: Message) -> None:
     logger.debug("User %s started the bot", message.from_user and message.from_user.id)
@@ -507,6 +518,10 @@ async def handle_resume(
         await message.answer(t("ui.resume_no_matches" if query else "ui.resume_no_sessions"))
         return
 
+    current_session_id = tmux_manager.get_active_session_id(
+        key
+    ) or session_manager.get_current_session_id(key)
+    entries = _pin_current_session(entries, current_session_id)
     token = picker_store.put(
         PickerState(
             chat_id=key[0],
@@ -518,9 +533,6 @@ async def handle_resume(
         )
     )
     total_pages = max(1, math.ceil(len(entries) / 8))
-    current_session_id = tmux_manager.get_active_session_id(
-        key
-    ) or session_manager.get_current_session_id(key)
     await message.answer(
         _resume_caption(
             runtime.cwd,

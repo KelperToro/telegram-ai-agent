@@ -184,6 +184,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.resume_picker_caption_hdr": "Sessions for <code>{cwd}</code>, page {page}/{total}",
         "ui.resume_picker_caption_all_hdr": (
             "Saved chats from all projects, page {page}/{total}. "
+            "If listed, the current chat is first and marked ✅. "
             "Search by name or project: /resume &lt;word&gt;"
         ),
         "ui.resume_no_sessions": "No saved sessions for this cwd",
@@ -483,6 +484,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.resume_picker_caption_hdr": "Сессии для <code>{cwd}</code>, страница {page}/{total}",
         "ui.resume_picker_caption_all_hdr": (
             "Сохранённые чаты всех проектов, страница {page}/{total}. "
+            "Если текущий чат есть в списке, он первый и отмечен ✅. "
             "Поиск по названию или проекту: /resume &lt;слово&gt;"
         ),
         "ui.resume_no_sessions": "Сохранённых сессий для этого cwd нет",
