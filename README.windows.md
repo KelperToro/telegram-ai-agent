@@ -6,10 +6,12 @@
 
 ## Подготовка
 
-Установите Python 3.12 или новее и Codex CLI либо Codex Desktop. В PowerShell
-из каталога проекта:
+Установите Python 3.12 или новее, Git и Codex CLI либо Codex Desktop.
+В PowerShell скачайте этот Windows-форк и установите зависимости:
 
 ```powershell
+git clone https://github.com/KelperToro/telegram-ai-agent.git
+cd telegram-ai-agent
 py -3.12 -m pip install --user uv
 py -3.12 -m uv sync --group dev
 Copy-Item .env.example .env
