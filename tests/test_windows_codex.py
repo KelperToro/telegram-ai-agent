@@ -101,10 +101,14 @@ def test_resume_excludes_subagent_with_second_desktop_metadata(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_resume_reads_name_of_chat_missing_from_thread_list(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     import telegram_bot.core.services.codex_app_server as app_server
 
     sid = "018f0000-0000-7000-8000-000000000001"
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setenv("TELEGRAM_CODEX_SHARED_HOME", "1")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     class FakeClient:
         async def __aenter__(self) -> FakeClient:
@@ -123,6 +127,39 @@ async def test_resume_reads_name_of_chat_missing_from_thread_list(
 
     monkeypatch.setattr(app_server, "CodexAppServerClient", FakeClient)
     assert await list_codex_thread_titles(fallback_ids=[sid]) == {sid: "Older desktop chat"}
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_latest_local_chat_name_when_app_server_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import telegram_bot.core.services.codex_app_server as app_server
+
+    sid = "018f0000-0000-7000-8000-000000000001"
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("TELEGRAM_CODEX_SHARED_HOME", "1")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (codex_home / "session_index.jsonl").write_text(
+        json.dumps({"id": sid, "thread_name": "Old name"})
+        + "\n"
+        + "incomplete JSON\n"
+        + json.dumps({"id": sid, "thread_name": "Новое название чата"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class UnavailableClient:
+        async def __aenter__(self) -> UnavailableClient:
+            raise CodexAppServerError("thread/list unavailable")
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(app_server, "CodexAppServerClient", UnavailableClient)
+    assert await list_codex_thread_titles(fallback_ids=[sid]) == {sid: "Новое название чата"}
 
 
 def test_desktop_first_turn_progress_preserves_status_and_commentary() -> None:

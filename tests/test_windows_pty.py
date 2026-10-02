@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from telegram_bot.core.services.process_cleanup import processes_by_sid
 from telegram_bot.core.services.tmux_manager import TmuxManager
 from telegram_bot.core.services.tmux_state import TmuxSessionState
 from telegram_bot.core.services.windows_pty import configure_broker, run_tmux
@@ -22,6 +23,9 @@ def test_windows_broker_persists_and_captures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    # The adapter must use native ConPTY even if the operator's shell has
+    # configured pywinpty's legacy backend for another application.
+    monkeypatch.setenv("PYWINPTY_BACKEND", "1")
     configure_broker(tmp_path)
     broker_file = Path(os.environ["TELEGRAM_BOT_PTY_BROKER_FILE"])
     try:
@@ -46,6 +50,9 @@ def test_windows_broker_persists_and_captures(
             text=True,
         )
         assert started.returncode == 0, started.stderr
+        broker_pid = json.loads(broker_file.read_text(encoding="utf-8"))["pid"]
+        child_names = [item.command.casefold() for item in processes_by_sid(broker_pid)]
+        assert "winpty-agent.exe" not in child_names, child_names
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             pane = run_tmux(

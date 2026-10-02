@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import replace
@@ -87,6 +88,106 @@ class FakeSessions:
 
     async def clear_provider_session(self, key: tuple[int, int | None]) -> None:
         self.cleared.append(key)
+
+
+@pytest.mark.asyncio
+async def test_resume_page_clamps_to_last_nonempty_page(
+    tmp_path: Path,
+) -> None:
+    import telegram_bot.core.handlers.commands as commands
+
+    entries = tuple(
+        SessionEntry(
+            provider="codex",
+            session_id=f"018f0000-0000-7000-8000-{number:012d}",
+            transcript_path=tmp_path / f"{number}.jsonl",
+            preview=f"Saved chat {number}",
+            mtime=float(number),
+            size_bytes=1,
+            cwd=tmp_path,
+        )
+        for number in range(1, 19)
+    )
+    store = PickerStore()
+    token = store.put(
+        PickerState(
+            chat_id=456,
+            thread_id=None,
+            cwd=tmp_path,
+            engine="codex",
+            entries=entries,
+            created_at=time.time(),
+        )
+    )
+    settings = Settings(telegram_bot_token="123:test", project_root=str(tmp_path), _env_file=None)
+    manager = SessionManager(settings)
+    message = FakeMessage(456)
+    await commands.on_resume_page(
+        FakeCallback(message, f"rs:p:{token}:999"),
+        store,
+        FakeTmux(),
+        manager,
+    )  # type: ignore[arg-type]
+
+    assert len(message.edited) == 1
+    assert "Saved chat 18" in message.edited[0]
+
+
+@pytest.mark.asyncio
+async def test_resume_shows_saved_chat_when_remote_title_lookup_stalls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import telegram_bot.core.handlers.commands as commands
+
+    sid = "018f0000-0000-7000-8000-000000000001"
+    home = tmp_path / "codex"
+    sessions = home / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "chat.jsonl").write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {"type": "session_meta", "payload": {"id": sid, "cwd": str(tmp_path)}},
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "Fix saved project",
+                    },
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setattr(commands, "_RESUME_TITLES_TIMEOUT_SEC", 0.01, raising=False)
+
+    async def stalled_lookup(**_kwargs: Any) -> dict[str, str]:
+        await asyncio.Event().wait()
+        return {}
+
+    monkeypatch.setattr(commands, "list_codex_thread_titles", stalled_lookup)
+    config = TopicConfig(str(tmp_path / "topics.json"), str(tmp_path))
+    await config.update_engine(-456, "codex")
+    settings = Settings(telegram_bot_token="123:test", project_root=str(tmp_path), _env_file=None)
+    manager = SessionManager(settings, topic_config=config)
+    message = FakeMessage(456)
+    message.text = "/resume"
+    await asyncio.wait_for(
+        commands.handle_resume(
+            message,
+            manager,
+            config,
+            FakeTmux(),
+            PickerStore(),
+            BotDefaults(cwd=tmp_path, mcp_config=tmp_path / "mcp.json"),
+        ),
+        timeout=0.2,
+    )  # type: ignore[arg-type]
+
+    assert len(message.sent) == 1
+    assert "Fix saved project" in message.sent[0]
 
 
 @pytest.mark.asyncio

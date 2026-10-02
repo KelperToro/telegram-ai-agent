@@ -31,12 +31,17 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from telegram_bot.core.messages import t
+from telegram_bot.core.services.claude import SessionManager
+from telegram_bot.core.services.message_queue import MessageQueue
+from telegram_bot.core.services.resume_listing import list_sessions
 from telegram_bot.core.services.tmux_manager import TmuxManager
 from telegram_bot.core.services.tmux_modal_watchdog import (
     AUDIT_SOURCE_TUI_BUTTON,
     AUDIT_SOURCE_USER_COMMAND,
     log_alert_audit,
 )
+from telegram_bot.core.services.topic_config import TopicConfig
+from telegram_bot.core.services.topic_runtime import BotDefaults
 from telegram_bot.core.services.windows_pty import run_tmux
 from telegram_bot.core.tui.capture import escape_pane_for_html
 from telegram_bot.core.tui.modal_alert import render_modal_idle_alert
@@ -167,28 +172,46 @@ def _resolve_session_name(tmux_manager: TmuxManager, key: ChannelKey) -> str | N
 
 
 @router.message(F.text == t("ui.btn_tui"))
-async def handle_tui_button(message: Message, tmux_manager: TmuxManager) -> None:
+async def handle_tui_button(
+    message: Message,
+    tmux_manager: TmuxManager,
+    session_manager: SessionManager,
+    topic_config: TopicConfig,
+    message_queue: MessageQueue,
+    bot_defaults: BotDefaults,
+) -> None:
     """Reply-button shortcut for /tui. Aliases the same entry point so the
     user can reach the TUI snapshot with one keyboard tap instead of
     typing `/tui`."""
     await _handle_tail_entry(
         message,
         tmux_manager,
+        session_manager,
+        topic_config,
+        message_queue,
+        bot_defaults,
         audit_source=AUDIT_SOURCE_TUI_BUTTON,
         audit_reason="user_pressed_tui_button",
     )
 
 
 @router.message(Command("tui", "tail"))
-async def handle_tail_command(message: Message, tmux_manager: TmuxManager) -> None:
-    """Render a TUI snapshot with an inline navigation keyboard.
-
-    Only fires in topics with a live tmux session. For subprocess topics or
-    dead tmux the user gets `ui.tail_unavailable` — no capture attempted.
-    """
+async def handle_tail_command(
+    message: Message,
+    tmux_manager: TmuxManager,
+    session_manager: SessionManager,
+    topic_config: TopicConfig,
+    message_queue: MessageQueue,
+    bot_defaults: BotDefaults,
+) -> None:
+    """Open the selected chat as a TUI and render its navigation panel."""
     await _handle_tail_entry(
         message,
         tmux_manager,
+        session_manager,
+        topic_config,
+        message_queue,
+        bot_defaults,
         audit_source=AUDIT_SOURCE_USER_COMMAND,
         audit_reason="user_typed_/tui",
     )
@@ -197,6 +220,10 @@ async def handle_tail_command(message: Message, tmux_manager: TmuxManager) -> No
 async def _handle_tail_entry(
     message: Message,
     tmux_manager: TmuxManager,
+    session_manager: SessionManager,
+    topic_config: TopicConfig,
+    message_queue: MessageQueue,
+    bot_defaults: BotDefaults,
     *,
     audit_source: str,
     audit_reason: str,
@@ -209,8 +236,36 @@ async def _handle_tail_entry(
     """
     key = channel_key(message)
     if not tmux_manager.is_active(key):
-        await message.answer(t("ui.tail_unavailable"))
-        return
+        if message_queue.is_busy(key) or tmux_manager.is_processing(key):
+            await message.answer(t("ui.exec_mode_busy"))
+            return
+        current = session_manager._get_session(key)
+        entries = await asyncio.to_thread(list_sessions, current.cwd)
+        selected = next(
+            (
+                entry
+                for entry in entries
+                if entry.session_id == current.session_id and entry.provider == current.engine
+            ),
+            None,
+        )
+        if selected is None:
+            await message.answer(t("ui.tail_unavailable"))
+            return
+        await message.answer(t("ui.resume_starting"), disable_notification=True)
+        switch_result = await tmux_manager.switch_or_start_session(
+            key,
+            selected.session_id,
+            selected.provider,
+            selected.transcript_path,
+            session_manager=session_manager,
+            topic_config=topic_config,
+            defaults=bot_defaults,
+        )
+        if switch_result.kind not in {"started", "switched", "already_on_it"}:
+            await message.answer(t(f"ui.resume_{switch_result.kind}"))
+            return
+        await tmux_manager.ensure_recovery_tail(key)
 
     session_name = _resolve_session_name(tmux_manager, key)
     # `get_expected_epoch` returns the real session_id[:8] when known,

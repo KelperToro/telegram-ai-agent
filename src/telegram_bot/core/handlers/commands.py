@@ -64,6 +64,7 @@ from telegram_bot.core.types import ChannelKey, channel_key
 from telegram_bot.core.utils.telegram_html import split_html_message
 
 logger = logging.getLogger(__name__)
+_RESUME_TITLES_TIMEOUT_SEC = 3.0
 
 
 def _exec_mode_label(mode: str) -> str:
@@ -495,8 +496,13 @@ async def handle_resume(
     entries = tuple(await asyncio.to_thread(list_sessions, runtime.cwd, all_codex=private_chat))
     if private_chat:
         try:
-            names = await list_codex_thread_titles(
-                fallback_ids=(entry.session_id for entry in entries if entry.provider == "codex")
+            names = await asyncio.wait_for(
+                list_codex_thread_titles(
+                    fallback_ids=(
+                        entry.session_id for entry in entries if entry.provider == "codex"
+                    )
+                ),
+                timeout=_RESUME_TITLES_TIMEOUT_SEC,
             )
         except (CodexAppServerError, OSError, TimeoutError):
             logger.warning("Could not load Codex thread names", exc_info=True)
@@ -535,7 +541,7 @@ async def handle_resume(
             created_at=time.time(),
         )
     )
-    total_pages = max(1, math.ceil(len(entries) / 8))
+    total_pages = max(1, math.ceil(len(entries) / RESUME_PAGE_SIZE))
     await message.answer(
         _resume_caption(
             runtime.cwd,
@@ -642,7 +648,7 @@ async def on_resume_page(
     except ValueError:
         await _stale_resume_picker(callback)
         return
-    total_pages = max(1, math.ceil(len(state.entries) / 8))
+    total_pages = max(1, math.ceil(len(state.entries) / RESUME_PAGE_SIZE))
     page = max(0, min(page, total_pages - 1))
     try:
         await callback.message.edit_text(
