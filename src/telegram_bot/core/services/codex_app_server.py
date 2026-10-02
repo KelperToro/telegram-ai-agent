@@ -281,11 +281,35 @@ def _thread_list_label(item: dict[str, Any]) -> str | None:
     return normalized[:120]
 
 
+def _local_codex_thread_titles() -> dict[str, str]:
+    """Read the append-only chat-name index shared with Codex Desktop."""
+    codex_home = Path(codex_process_env().get("CODEX_HOME") or Path.home() / ".codex")
+    names: dict[str, str] = {}
+    try:
+        with (codex_home / "session_index.jsonl").open(encoding="utf-8") as index:
+            for line in index:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                thread_id = record.get("id")
+                title = _thread_list_label({"name": record.get("thread_name")})
+                if isinstance(thread_id, str) and title:
+                    names[thread_id] = title
+    except (OSError, UnicodeError):
+        return {}
+    return names
+
+
 async def list_codex_thread_titles(
     *, max_threads: int = 500, fallback_ids: Iterable[str] = ()
 ) -> dict[str, str]:
-    """Read Desktop chat names without hydrating large conversation histories."""
-    names: dict[str, str] = {}
+    """Prefer local chat names; use app-server for installations without an index."""
+    names = await asyncio.to_thread(_local_codex_thread_titles)
+    if names:
+        return names
     async with CodexAppServerClient() as client:
         for archived in (False, True):
             cursor: str | None = None
