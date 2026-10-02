@@ -108,6 +108,7 @@ async def test_resume_reads_name_of_chat_missing_from_thread_list(
     sid = "018f0000-0000-7000-8000-000000000001"
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.setenv("TELEGRAM_CODEX_SHARED_HOME", "1")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     class FakeClient:
         async def __aenter__(self) -> FakeClient:
@@ -136,9 +137,12 @@ async def test_resume_uses_latest_local_chat_name_when_app_server_is_unavailable
     import telegram_bot.core.services.codex_app_server as app_server
 
     sid = "018f0000-0000-7000-8000-000000000001"
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("TELEGRAM_CODEX_SHARED_HOME", "1")
-    (tmp_path / "session_index.jsonl").write_text(
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (codex_home / "session_index.jsonl").write_text(
         json.dumps({"id": sid, "thread_name": "Old name"})
         + "\n"
         + "incomplete JSON\n"
