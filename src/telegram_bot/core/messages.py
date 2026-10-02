@@ -99,8 +99,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         # --- UI: tail / tui feature strings (Wave 3 tmux-tui-mode) ----
         "ui.tail_unavailable": (
-            "⚠️ No active tmux session — /tui is unavailable."
-            " Switch to tmux mode or start the session first."
+            "⚠️ No chat is available for TUI. Select a saved chat with /resume,"
+            " or choose TUI in /mode and send a message."
         ),
         "ui.tail_snapshot_header": "TUI snapshot (last lines):",
         "ui.tail_keyboard_stale": ("Keyboard is outdated — session restarted. Call /tui again."),
@@ -408,8 +408,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.codex_update_cooldown": "Автообновление Codex пропущено: cooldown ещё активен.",
         # --- UI: tail / tui feature strings (Wave 3 tmux-tui-mode) ----
         "ui.tail_unavailable": (
-            "⚠️ Нет активной tmux-сессии — /tui недоступен."
-            " Сначала переключись в tmux или запусти сессию."
+            "⚠️ Нет чата для открытия TUI. Выбери сохранённый чат через /resume"
+            " или выбери TUI в /mode и отправь сообщение."
         ),
         "ui.tail_snapshot_header": "Снимок TUI (последние строки):",
         "ui.tail_keyboard_stale": (
