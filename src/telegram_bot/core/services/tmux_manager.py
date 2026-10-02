@@ -44,6 +44,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -166,6 +167,10 @@ _TMUX_CMD_TIMEOUT_SEC = 10.0
 _POLL_STEP_SEC = 0.05  # fine-grained poll interval inside send_direct's pane-verify loop
 _ENTER_RETRY_SETTLE_SEC = 0.5
 _ENTER_RETRY_LIMIT = 3
+# A cold Windows Codex turn can retain the submitted prompt while its
+# backend initializes. Keep the existing bounded Enter policy, but allow
+# the Windows UI to acknowledge submission before declaring it uncertain.
+_CODEX_ENTER_RETRY_SETTLE_SEC = 2.0 if os.name == "nt" else _ENTER_RETRY_SETTLE_SEC
 
 # Codex `_safe_send_codex` paste-visibility budget. The user payload is
 # pasted exactly once, then observed across three 1.5s polling windows.
@@ -1842,7 +1847,7 @@ class TmuxManager:
                 )
                 return False
 
-            await asyncio.sleep(_ENTER_RETRY_SETTLE_SEC)
+            await asyncio.sleep(_CODEX_ENTER_RETRY_SETTLE_SEC)
             if (
                 transcript_ack_path is not None
                 and transcript_ack_offset is not None

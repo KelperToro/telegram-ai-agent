@@ -287,7 +287,7 @@ class _Broker:
         if op == "server-pid":
             return {"ok": True, "stdout": f"{os.getpid()}\n"}
         if op == "spawn":
-            from winpty import PtyProcess  # type: ignore[import-untyped]
+            from winpty import Backend, PtyProcess  # type: ignore[import-untyped]
 
             name = request["name"]
             with self.lock:
@@ -299,7 +299,10 @@ class _Broker:
                     cwd=request["cwd"],
                     env=request["env"],
                     dimensions=(request["rows"], request["cols"]),
-                    backend=1,
+                    # pywinpty treats integer 0 as an unset argument and can
+                    # fall back to PYWINPTY_BACKEND. Its truthy string form
+                    # is converted to 0 internally and forces native ConPTY.
+                    backend=str(Backend.ConPTY),
                 )
                 self.sessions[name] = _Session(process, request["cols"], request["rows"])
             return {"ok": True}
